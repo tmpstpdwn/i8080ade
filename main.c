@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -9,10 +10,12 @@
 enum OpcodeType {
   OP_FIXED,
   OP_REG_REG,
+  OP_REG_ID,
   OP_REG,
-  OP_REG_PAIR,
+  OP_REG_PAIR_SP,
   OP_REG_PAIR_BD,
   OP_REG_PAIR_PSW,
+  OP_REG_IMM16,
   OP_REG_IMM8,
   OP_IMM8,
   OP_ADDR16
@@ -26,16 +29,16 @@ struct OpRec {
 
 static struct OpRec opcode_table[] = {
   {"NOP",      OP_FIXED,          0x00},
-  {"LXI",      OP_REG_PAIR,       0x01},
+  {"LXI",      OP_REG_IMM16,       0x01},
   {"STAX",     OP_REG_PAIR_BD,    0x02},
-  {"INX",      OP_REG_PAIR,       0x03},
-  {"INR",      OP_REG,            0x04},
-  {"DCR",      OP_REG,            0x05},
+  {"INX",      OP_REG_PAIR_SP,       0x03},
+  {"INR",      OP_REG_ID,         0x04},
+  {"DCR",      OP_REG_ID,         0x05},
   {"MVI",      OP_REG_IMM8,       0x06},
   {"RLC",      OP_FIXED,          0x07},
-  {"DAD",      OP_REG_PAIR,       0x09},
+  {"DAD",      OP_REG_PAIR_SP,       0x09},
   {"LDAX",     OP_REG_PAIR_BD,    0x0A},
-  {"DCX",      OP_REG_PAIR,       0x0B},
+  {"DCX",      OP_REG_PAIR_SP,       0x0B},
   {"RRC",      OP_FIXED,          0x0F},
   {"RAL",      OP_FIXED,          0x17},
   {"RAR",      OP_FIXED,          0x1F},
@@ -106,7 +109,7 @@ static struct OpRec opcode_table[] = {
   {NULL}
 };
 
-static int reg_to_num(char r) {
+static int register_code(char r) {
   switch (r) {
     case 'B':
       return 0;
@@ -129,6 +132,45 @@ static int reg_to_num(char r) {
   }
 }
 
+static int operand_code(char *r, enum OpcodeType op_t) {
+  if (!r) return -1;
+
+  int len = strlen(r);
+  if (len == 0) return -1;
+
+  int n = register_code(*r);
+
+  switch (op_t) {
+    case OP_REG_REG:
+    case OP_REG_ID:
+    case OP_REG:
+    case OP_REG_IMM8: {
+        if (len != 1) return -1;
+        return n;
+    }
+
+    case OP_REG_PAIR_BD: {
+        if (len == 1 && n % 2 == 0 && n < 4)
+          return n / 2;
+        return -1;
+    }
+
+    case OP_REG_PAIR_SP:
+    case OP_REG_IMM16:
+    case OP_REG_PAIR_PSW: {
+        if (len == 1 && n % 2 == 0 && n < 6) {
+          return n / 2;
+        } else {
+          char *s = (op_t == OP_REG_PAIR_PSW)? "PSW": "SP";
+          if (strcmp(r, s) == 0) return 3;
+        }
+        return -1;
+    }
+
+    default: return -1;
+  }
+}
+
 static void to_uppercase(char *s) {
   if (!s) return;
 
@@ -140,25 +182,134 @@ static void to_uppercase(char *s) {
   }
 }
 
-// Returns 4 bytes. 1st byte gives the instruction len.
-// Rest 3 bytes for the actual instruction.
-// Max instruction len is 3 bytes, so it works.
-static uint32_t assemble_instr(char *instr) {
-  uint16_t asm_instr = 0;
-  uint8_t asm_instr_len = 1;
+static bool str_to_hex(const char *str, uint64_t *num) {
+    char *endptr;
+    uint64_t val;
+
+    errno = 0;
+
+    val = strtoull(str, &endptr, 16);
+
+    if (errno == ERANGE) return false;
+
+    if (endptr == str) return false;
+    while (isspace((unsigned char)*endptr)) {
+        endptr++;
+    }
+    if (*endptr != '\0') return false;
+
+    *num = val;
+
+    return true;
+} 
+
+static uint32_t assemble(char *instr) {
+  uint32_t asmbld_instr = 0;
 
   char *token = strtok(instr, " ,");
 
-  // DO THE ASM EMISSION.
+  for (int i = 0; opcode_table[i].name != NULL; i++) {
+    if (strcmp(token, opcode_table[i].name) == 0) {
+      enum OpcodeType op_t = opcode_table[i].type;
+      uint8_t opcode = opcode_table[i].opcode;
 
-  return asm_instr_len << 24 | asm_instr;
+      char *operand1 = strtok(NULL, " ,");
+      char *operand2 = strtok(NULL, " ,");
+
+      int operand1_c = operand_code(operand1, op_t);
+      int operand2_c = operand_code(operand2, op_t);
+
+      switch (op_t) {
+
+        case OP_FIXED:
+          asmbld_instr = opcode;
+          break;
+
+        case OP_REG_REG:
+          if (operand1_c == -1 || operand2_c == -1) break;
+          asmbld_instr = opcode + (operand1_c << 3) + operand2_c;
+          break;
+
+        case OP_REG_ID:
+          if (operand1_c == -1) break;
+          asmbld_instr = opcode + (operand1_c << 3);
+          break;
+
+        case OP_REG:
+          if (operand1_c == -1) break;
+          asmbld_instr = opcode + operand1_c;
+          break;
+
+        case OP_REG_PAIR_SP:
+        case OP_REG_PAIR_BD:
+        case OP_REG_PAIR_PSW:
+          if (operand1_c == -1) break;
+          asmbld_instr = opcode + (operand1_c << 4);
+          break;
+
+        case OP_REG_IMM16: {
+          if (operand1_c == -1) break;
+
+          uint64_t val;
+          if (str_to_hex(operand2, &val) == false) break;
+          uint16_t val_16 = val & 0xFFFF;
+
+          uint8_t final_opcode = opcode + (operand1_c << 4);
+          uint16_t d16_little_endian = (val_16 & 0x00FF) << 8 | val_16 >> 8;
+
+          asmbld_instr = ((uint32_t)final_opcode << 16) | d16_little_endian;
+          break;
+        }
+
+        case OP_REG_IMM8: {
+          if (operand1_c == -1) break;
+
+          uint64_t val;
+          if (str_to_hex(operand2, &val) == false) break;
+          uint8_t d8 = val & 0xFF;
+
+          uint8_t final_opcode = opcode + (operand1_c << 4);
+
+          asmbld_instr = ((uint32_t)final_opcode << 8) | d8;
+          break;
+        }
+
+        case OP_IMM8: {
+          uint64_t val;
+
+          if (str_to_hex(operand2, &val) == false) break;
+          uint8_t d8 = val & 0xFF;
+
+          asmbld_instr = ((uint32_t)opcode << 8) | d8;
+          break;
+        }
+
+        case OP_ADDR16: {
+          uint64_t val;
+
+          if (str_to_hex(operand2, &val) == false) break;
+
+          uint16_t val_16 = val & 0xFFFF;
+          uint16_t d16_little_endian = (val_16 & 0x00FF) << 8 | val_16 >> 8;
+
+          asmbld_instr = ((uint32_t)opcode << 16) | d16_little_endian;
+          break;
+        }
+         
+        default: break;
+      }
+
+    }
+  }
+
+  return asmbld_instr;
 }  
 
 static bool assemble_rom(FILE *fp) {
   char line[256];
 
   while (fgets(line, sizeof(line), fp) != NULL) {
-    assemble_instr(line);
+    assemble(line);
   }
 
   return true;

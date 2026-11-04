@@ -3,6 +3,6 @@
 
 #include <stdint.h>
 
-uint32_t assemble(char *s);
+uint32_t assemble(const char *s);
 
 #endif

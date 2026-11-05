@@ -6,6 +6,8 @@
 #include <stdbool.h>
 #include <stdlib.h>
 
+#include <stdio.h>
+
 #include "assembler.h"
 
 enum OpcodeType {
@@ -203,7 +205,79 @@ static bool str_to_hex(const char *str, uint64_t *num) {
   *num = val;
 
   return true;
-} 
+}
+
+struct TokenList {
+  char **tokens;
+  size_t len;
+};
+
+bool is_single_token(char c) {
+  return c == ',';
+}
+
+struct TokenList get_tokens(const char *s) {
+  if (!s) goto fail2;
+
+  size_t tokens_len = 4;
+  size_t tokens_i = 0;
+  char **tokens = malloc(sizeof(char **) * tokens_len);
+
+  if (!tokens) goto fail1;
+
+  size_t from;
+  bool intoken = false;
+
+  for (int i = 0; s[i] != '\0'; i++) {
+
+    if (isspace(s[i])) {
+      if (intoken) {
+        size_t token_len = i - from;
+        char *token = malloc(sizeof(char) * token_len + 1);
+        if (!token) goto fail1;
+
+        int j = 0;
+        while (j < token_len) {
+          token[j] = s[from + j];
+          j++;
+        }
+        token[j] = '\0';
+
+        if (tokens_i >= tokens_len) {
+          char **tmp = realloc(tokens, sizeof(char *) * tokens_len * 2);
+          if (!tmp) goto fail1;
+          tokens = tmp;
+          tokens_len *= 2;
+        }
+
+        tokens[tokens_i++] = token;
+        
+        intoken = false;
+      }
+      continue;      
+    }
+
+    if (!intoken) {
+      from = i;
+      intoken = true;
+    } else {
+      
+    }    
+  }
+
+  return (struct TokenList){tokens, tokens_i};
+
+fail1:
+  for (int i = 0; i < tokens_i; i++) free(tokens[i]);
+  free(tokens);
+
+fail2:
+  return (struct TokenList){NULL, 0};
+}
+
+void free_tokens(struct TokenList tokens) {
+  if (tokens.tokens) free(tokens.tokens);
+}
 
 uint32_t assemble(const char *s) {
   if (!s) return 0;

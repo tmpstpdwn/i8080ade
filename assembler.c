@@ -207,76 +207,92 @@ static bool str_to_hex(const char *str, uint64_t *num) {
   return true;
 }
 
-struct TokenList {
-  char **tokens;
-  size_t len;
-};
-
 bool is_single_token(char c) {
-  return c == ',';
+  return c == ',' || c == ':';
 }
 
-struct TokenList get_tokens(const char *s) {
-  if (!s) goto fail2;
+char *substr(const char *str, size_t from, size_t to) {
+  if (!str || from >= to) return NULL;
 
-  size_t tokens_len = 4;
-  size_t tokens_i = 0;
-  char **tokens = malloc(sizeof(char **) * tokens_len);
+  size_t str_len = strlen(str);
 
-  if (!tokens) goto fail1;
+  if (from >= str_len || to > str_len) return NULL;
+  
+  size_t substr_len = to - from;
+  char *substr = malloc(sizeof(char) * substr_len + 1);
+  if (!substr) return NULL;
+
+  for (int i = 0; i < substr_len; i++)
+    substr[i] = str[from + i];
+
+  substr[substr_len] = '\0';
+
+  return substr;
+}
+
+size_t tokens_len = 0;
+size_t tokens_i = 0;
+char **tokens = NULL;
+
+bool add_token(char *token) {
+  if (!token) return false;
+
+  if (tokens_i >= tokens_len) {
+    char **tmp = realloc(tokens, sizeof(char *) * (tokens_len + 5));
+    if (!tmp) return false;
+    tokens = tmp;
+    tokens_len += 5;
+  }
+
+  tokens[tokens_i++] = token;
+
+  return true;
+}
+
+void tokenize(const char *s) {
+  if (!s) goto fail;
+
+  for (int i = 0; i < tokens_i; i++) free(tokens[i]);
+  tokens_i = 0;
 
   size_t from;
   bool intoken = false;
 
-  for (int i = 0; s[i] != '\0'; i++) {
-
-    if (isspace(s[i])) {
+  int i = 0;
+  while (s[i]) {
+    if (isspace(s[i]) || is_single_token(s[i])) {
       if (intoken) {
-        size_t token_len = i - from;
-        char *token = malloc(sizeof(char) * token_len + 1);
-        if (!token) goto fail1;
-
-        int j = 0;
-        while (j < token_len) {
-          token[j] = s[from + j];
-          j++;
-        }
-        token[j] = '\0';
-
-        if (tokens_i >= tokens_len) {
-          char **tmp = realloc(tokens, sizeof(char *) * tokens_len * 2);
-          if (!tmp) goto fail1;
-          tokens = tmp;
-          tokens_len *= 2;
-        }
-
-        tokens[tokens_i++] = token;
-        
+        char *token = substr(s, from, i);
+        if (!token || !add_token(token)) goto fail;
         intoken = false;
       }
-      continue;      
+      if (is_single_token(s[i])) {
+        char *token = substr(s, i, i+1);
+        if (!token || !add_token(token)) goto fail;
+      }
+
+      i++;
+      continue;
     }
 
     if (!intoken) {
-      from = i;
       intoken = true;
-    } else {
-      
-    }    
+      from = i;
+    }
+
+    i++;
   }
 
-  return (struct TokenList){tokens, tokens_i};
+  if (intoken) {
+    char *token = substr(s, from, strlen(s));
+    if (!token || !add_token(token)) goto fail;
+  }
 
-fail1:
+  return;
+
+fail:
   for (int i = 0; i < tokens_i; i++) free(tokens[i]);
-  free(tokens);
-
-fail2:
-  return (struct TokenList){NULL, 0};
-}
-
-void free_tokens(struct TokenList tokens) {
-  if (tokens.tokens) free(tokens.tokens);
+  tokens_i = 0;
 }
 
 uint32_t assemble(const char *s) {
@@ -397,3 +413,18 @@ uint32_t assemble(const char *s) {
   free(text_instr);
   return asmbld_instr;
 }  
+
+void free_tokens(void) {
+  for (int i = 0; i < tokens_i; i++) {
+    free(tokens[i]);
+  }
+  free(tokens);
+}
+
+int main(void) {
+  tokenize("LABEL:MVI D,10");
+  for (int i = 0; i < tokens_i; i++) {
+    printf("%s\n", tokens[i]);
+  }
+  free_tokens();
+}

@@ -10,6 +10,26 @@
 
 #include "assembler.h"
 
+enum TokenKind {
+  NONE,
+  IDENTIFIER,
+  PUNCTUATION,
+  NUMBER,
+  UNKNOWN,
+};
+
+struct Token {
+  enum TokenKind kind;
+  char *text;
+  uint64_t value;
+  size_t col;
+};
+
+struct TokenList {
+  struct Token *tokens;
+  size_t len, cap;
+};
+
 enum OpcodeType {
   OP_FIXED,
   OP_REG_REG,
@@ -29,6 +49,10 @@ struct OpRec {
   char *name;
   enum OpcodeType type;
   uint8_t opcode;
+};
+
+static const char *kind_names[] = {
+    "NONE", "IDENTIFIER", "PUNCTUATION", "NUMBER", "UNKNOWN"
 };
 
 static struct OpRec opcode_table[] = {
@@ -207,11 +231,33 @@ static bool str_to_hex(const char *str, uint64_t *num) {
   return true;
 }
 
-bool is_single_token(char c) {
-  return c == ',' || c == ':';
+static enum TokenKind get_tokenkind(enum TokenKind last_token_kind, char last_token, char curr_token) {
+  if (isalpha(curr_token)) {
+    if (last_token == '0') {
+      char c = toupper(curr_token);
+      if (c == 'X' || c == 'B')
+        return NUMBER;
+    }
+    return IDENTIFIER;
+  }
+
+  else if (isdigit(curr_token)) {
+    if (last_token_kind == IDENTIFIER)
+      return IDENTIFIER;
+    return NUMBER;
+  }
+
+  if (curr_token == ',' || curr_token == ':') return PUNCTUATION;
+  else if (curr_token == ' ') return NONE;
+
+  return UNKNOWN;
 }
 
-char *substr(const char *str, size_t from, size_t to) {
+static bool is_single_token(char c) {
+  return get_tokenkind(NONE, ' ', c) == PUNCTUATION;
+}
+
+static char *substr(const char *str, size_t from, size_t to) {
   if (!str || from >= to) return NULL;
 
   size_t str_len = strlen(str);
@@ -230,69 +276,56 @@ char *substr(const char *str, size_t from, size_t to) {
   return substr;
 }
 
-size_t tokens_len = 0;
-size_t tokens_i = 0;
-char **tokens = NULL;
-
-bool add_token(char *token) {
-  if (!token) return false;
-
-  if (tokens_i >= tokens_len) {
-    char **tmp = realloc(tokens, sizeof(char *) * (tokens_len + 5));
+static bool add_token(struct TokenList *token_list, struct Token token) {
+  if (token_list->len >= token_list->cap) {
+    struct Token *tmp = realloc(token_list->tokens, sizeof(struct Token) * (token_list->cap + 5));
     if (!tmp) return false;
-    tokens = tmp;
-    tokens_len += 5;
+    token_list->tokens = tmp;
+    token_list->cap += 5;
   }
 
-  tokens[tokens_i++] = token;
+  token_list->tokens[token_list->len++] = token;
 
   return true;
 }
 
-void tokenize(const char *s) {
+static struct TokenList get_token_list(const char *s) {
+  struct TokenList token_list = {NULL, 0, 0};
+
   if (!s) goto fail;
 
-  for (int i = 0; i < tokens_i; i++) free(tokens[i]);
-  tokens_i = 0;
-
   size_t from;
-  bool intoken = false;
+  char last_token = ' ';
+  enum TokenKind last_token_kind = NONE;
+  enum TokenKind curr_token_kind = NONE;
+  bool alive = true;
 
-  int i = 0;
-  while (s[i]) {
-    if (isspace(s[i]) || is_single_token(s[i])) {
-      if (intoken) {
-        char *token = substr(s, from, i);
-        if (!token || !add_token(token)) goto fail;
-        intoken = false;
-      }
-      if (is_single_token(s[i])) {
-        char *token = substr(s, i, i+1);
-        if (!token || !add_token(token)) goto fail;
-      }
-
-      i++;
-      continue;
+  for (int i = 0 ; alive ; i++) {
+    if (s[i] == '\0') {
+      curr_token_kind = NONE;
+      alive = false;
+    } else {
+      curr_token_kind = get_tokenkind(last_token_kind, last_token, s[i]);
     }
-
-    if (!intoken) {
-      intoken = true;
+    
+    if (curr_token_kind != last_token_kind || is_single_token(s[i])) {
+      if (last_token_kind != NONE) {
+        char *token = substr(s, from, i);
+        if (!token || !add_token(&token_list, (struct Token){last_token_kind, token, 0, i})) goto fail;
+      }
       from = i;
     }
 
-    i++;
+    last_token_kind = curr_token_kind;
+    last_token = s[i];
   }
 
-  if (intoken) {
-    char *token = substr(s, from, strlen(s));
-    if (!token || !add_token(token)) goto fail;
-  }
-
-  return;
+  return token_list;
 
 fail:
-  for (int i = 0; i < tokens_i; i++) free(tokens[i]);
-  tokens_i = 0;
+  printf("%d\n", (int)token_list.len);
+  free(token_list.tokens);
+  return (struct TokenList){0};
 }
 
 uint32_t assemble(const char *s) {
@@ -414,17 +447,15 @@ uint32_t assemble(const char *s) {
   return asmbld_instr;
 }  
 
-void free_tokens(void) {
-  for (int i = 0; i < tokens_i; i++) {
-    free(tokens[i]);
-  }
-  free(tokens);
+static inline void free_token_list(struct TokenList token_list) {
+  free(token_list.tokens);
 }
 
 int main(void) {
-  tokenize("LABEL:MVI D,10");
-  for (int i = 0; i < tokens_i; i++) {
-    printf("%s\n", tokens[i]);
+  struct TokenList token_list = get_token_list("MAIN: lxi B, 0xBEEF;mvi a,0Xff  delay0b10,  'A' 0b 0x 0xGG  123456789012345678901234567890 ,,:::  CALL foo+1  JMP  MAIN___2   0xAB_CD pop psW,xra c!ret");
+  for (int i = 0; i < token_list.len; i++) {
+    printf("%s %s\n", token_list.tokens[i].text, kind_names[token_list.tokens[i].kind]);
   }
-  free_tokens();
+  free_token_list(token_list);
+  return 0;
 }

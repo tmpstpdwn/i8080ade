@@ -5,6 +5,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <stdlib.h>
+#include <inttypes.h>
 
 #include <stdio.h>
 
@@ -15,7 +16,7 @@ enum TokenKind {
   IDENTIFIER,
   PUNCTUATION,
   NUMBER,
-  UNKNOWN,
+  INVALID,
 };
 
 struct Token {
@@ -52,7 +53,7 @@ struct OpRec {
 };
 
 static const char *kind_names[] = {
-    "NONE", "IDENTIFIER", "PUNCTUATION", "NUMBER", "UNKNOWN"
+    "NONE", "IDENTIFIER", "PUNCTUATION", "NUMBER", "INVALID"
 };
 
 static struct OpRec opcode_table[] = {
@@ -208,35 +209,68 @@ static void to_uppercase(char *s) {
   }
 }
 
-static bool str_to_hex(const char *str, uint64_t *num) {
-  if (!str || !num) return false;
+static bool str_to_num(const char *str, uint64_t *num) {
+    if (!str || !*str || !num)
+        return false;
 
-  char *endptr = NULL;
-  uint64_t val;
+    int base = 10;
+    const char *p = str;
 
-  errno = 0;
+    if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) {
+        base = 16;
+        p += 2;
+    }
+    else if (p[0] == '0' && (p[1] == 'b' || p[1] == 'B')) {
+        base = 2;
+        p += 2;
+    }
+    else if (p[0] == '0' && (p[1] == 'o' || p[1] == 'O')) {
+        base = 8;
+        p += 2;
+    }
 
-  val = strtoull(str, &endptr, 16);
+    if (!*p)
+        return false;
 
-  if (errno == ERANGE) return false;
+    if (base == 2) {
+        uint64_t value = 0;
 
-  if (endptr == str) return false;
-  while (isspace((unsigned char)*endptr)) {
-      endptr++;
-  }
-  if (*endptr != '\0') return false;
+        for (; *p; p++) {
+            if (*p != '0' && *p != '1')
+                return false;
 
-  *num = val;
+            unsigned digit = *p - '0';
 
-  return true;
+            if (value > (UINT64_MAX - digit) / 2)
+                return false;
+
+            value = value * 2 + digit;
+        }
+
+        *num = value;
+        return true;
+    }
+
+    errno = 0;
+    char *end;
+
+    unsigned long long value = strtoull(p, &end, base);
+
+    if (errno == ERANGE || *end != '\0' || end == p)
+        return false;
+
+    *num = (uint64_t)value;
+    return true;
 }
 
 static enum TokenKind get_tokenkind(enum TokenKind last_token_kind, char last_token, char curr_token) {
   if (isalpha(curr_token)) {
-    if (last_token == '0') {
+    if (last_token == '0' && last_token_kind == NUMBER) {
       char c = toupper(curr_token);
-      if (c == 'X' || c == 'B')
+      if (c == 'X' || c == 'B' || c == 'O')
         return NUMBER;
+    } else if (isalpha(last_token) && last_token_kind == NUMBER) {
+      return NUMBER;
     }
     return IDENTIFIER;
   }
@@ -248,9 +282,10 @@ static enum TokenKind get_tokenkind(enum TokenKind last_token_kind, char last_to
   }
 
   if (curr_token == ',' || curr_token == ':') return PUNCTUATION;
+  else if (curr_token == '_') return IDENTIFIER;
   else if (curr_token == ' ') return NONE;
 
-  return UNKNOWN;
+  return INVALID;
 }
 
 static bool is_single_token(char c) {
@@ -276,7 +311,7 @@ static char *substr(const char *str, size_t from, size_t to) {
   return substr;
 }
 
-static bool add_token(struct TokenList *token_list, struct Token token) {
+static bool token_list_add(struct TokenList *token_list, struct Token token) {
   if (token_list->len >= token_list->cap) {
     struct Token *tmp = realloc(token_list->tokens, sizeof(struct Token) * (token_list->cap + 5));
     if (!tmp) return false;
@@ -310,8 +345,13 @@ static struct TokenList get_token_list(const char *s) {
     
     if (curr_token_kind != last_token_kind || is_single_token(s[i])) {
       if (last_token_kind != NONE) {
-        char *token = substr(s, from, i);
-        if (!token || !add_token(&token_list, (struct Token){last_token_kind, token, 0, i})) goto fail;
+        char *token_str = substr(s, from, i);
+        struct Token token = {last_token_kind, token_str, 0, i};
+
+        if (last_token_kind == NUMBER && !str_to_num(token_str, &token.value))
+          token.kind = INVALID;
+
+        if (!token_str || !token_list_add(&token_list, token)) goto fail;
       }
       from = i;
     }
@@ -323,7 +363,6 @@ static struct TokenList get_token_list(const char *s) {
   return token_list;
 
 fail:
-  printf("%d\n", (int)token_list.len);
   free(token_list.tokens);
   return (struct TokenList){0};
 }
@@ -386,7 +425,7 @@ uint32_t assemble(const char *s) {
           if (operand1_c == -1) break;
 
           uint64_t val;
-          if (str_to_hex(operand2, &val) == false) break;
+          if (str_to_num(operand2, &val) == false) break;
           if (val > UINT16_MAX) break;
 
           uint8_t final_opcode = opcode + (operand1_c << 4);
@@ -399,7 +438,7 @@ uint32_t assemble(const char *s) {
           if (operand1_c == -1) break;
 
           uint64_t val;
-          if (str_to_hex(operand2, &val) == false) break;
+          if (str_to_num(operand2, &val) == false) break;
           if (val > UINT8_MAX) break;
 
           uint8_t final_opcode = opcode + (operand1_c << 3);
@@ -411,7 +450,7 @@ uint32_t assemble(const char *s) {
         case OP_IMM8: {
           uint64_t val;
 
-          if (str_to_hex(operand1, &val) == false) break;
+          if (str_to_num(operand1, &val) == false) break;
           if (val > UINT8_MAX) break;
 
           asmbld_instr = val << 8 | opcode;
@@ -421,7 +460,7 @@ uint32_t assemble(const char *s) {
         case OP_ADDR16: {
           uint64_t val;
 
-          if (str_to_hex(operand1, &val) == false) break;
+          if (str_to_num(operand1, &val) == false) break;
           if (val > UINT16_MAX) break;
 
           asmbld_instr = val << 8 | opcode;
@@ -431,7 +470,7 @@ uint32_t assemble(const char *s) {
         case OP_RST: {
           uint64_t val;
 
-          if (str_to_hex(operand1, &val) == false) break;
+          if (str_to_num(operand1, &val) == false) break;
           if (val >= 8) break;
 
           asmbld_instr = opcode | (val << 3);
@@ -452,9 +491,12 @@ static inline void free_token_list(struct TokenList token_list) {
 }
 
 int main(void) {
-  struct TokenList token_list = get_token_list("MAIN: lxi B, 0xBEEF;mvi a,0Xff  delay0b10,  'A' 0b 0x 0xGG  123456789012345678901234567890 ,,:::  CALL foo+1  JMP  MAIN___2   0xAB_CD pop psW,xra c!ret");
+  struct TokenList token_list = get_token_list("label:mvi D, 5");
   for (int i = 0; i < token_list.len; i++) {
-    printf("%s %s\n", token_list.tokens[i].text, kind_names[token_list.tokens[i].kind]);
+    printf("{%s,  %s,  %" PRIu64 "}\n",
+           token_list.tokens[i].text,
+           kind_names[token_list.tokens[i].kind],
+           token_list.tokens[i].value);
   }
   free_token_list(token_list);
   return 0;

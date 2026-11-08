@@ -11,6 +11,9 @@
 
 #include "assembler.h"
 
+#define RED   "\033[31m"
+#define RESET "\033[0m"
+
 enum TokenKind {
   NONE,
   IDENTIFIER,
@@ -39,7 +42,7 @@ struct TokenList {
 
 struct Error {
   char *text;
-  size_t col;
+  size_t start, end;
 };
 
 struct ErrorList {
@@ -285,14 +288,9 @@ static enum NumParseRes str_to_num(const char *str, uint64_t *num) {
 }
 
 static enum TokenKind get_tokenkind(enum TokenKind last_token_kind, char last_token, char curr_token) {
-  if (isalpha(curr_token)) {
-    if (last_token == '0' && last_token_kind == NUMBER) {
-      char c = toupper(curr_token);
-      if (c == 'X' || c == 'B' || c == 'O')
-        return NUMBER;
-    } else if (isalpha(last_token) && last_token_kind == NUMBER) {
+  if (isalpha(curr_token) || curr_token == '_') {
+    if (last_token_kind == NUMBER)
       return NUMBER;
-    }
     return IDENTIFIER;
   }
 
@@ -303,7 +301,6 @@ static enum TokenKind get_tokenkind(enum TokenKind last_token_kind, char last_to
   }
 
   if (curr_token == ',' || curr_token == ':') return PUNCTUATION;
-  else if (curr_token == '_') return IDENTIFIER;
   else if (curr_token == ' ') return NONE;
 
   return INVALID;
@@ -356,7 +353,7 @@ static struct ErrorList error_list_new(const char *line, size_t lineno) {
   return (struct ErrorList){NULL, substr(line, 0, strlen(line)), lineno, 0, 0};
 }
 
-static void error_list_add(struct ErrorList *error_list, const char *text, size_t col) {
+static void error_list_add(struct ErrorList *error_list, const char *text, size_t start, size_t end) {
   if (!error_list || !text) return;
 
   if (error_list->len >= error_list->cap) {
@@ -368,21 +365,38 @@ static void error_list_add(struct ErrorList *error_list, const char *text, size_
 
   char *text_s = substr(text, 0, strlen(text));
 
-  error_list->errors[error_list->len++] = (struct Error){text_s, col};
+  error_list->errors[error_list->len++] = (struct Error){text_s, start, end};
 }
 
 static void error_list_print(struct ErrorList error_list) {
     if (!error_list.len) return;
 
-    printf("%4zu | %s\n", error_list.lineno, error_list.line);
-
     for (size_t i = 0; i < error_list.len; i++) {
-        const struct Error *e = &error_list.errors[i];   /* still a local pointer into the array */
-        printf("     | %*s^ %s: %s\n", (int)e->col, "", "error", e->text);
-    }
+        const struct Error *e = &error_list.errors[i];
+        printf("%zu:%zu: %serror%s: %s\n", error_list.lineno, e->start, RED, RESET, e->text);
 
-    printf("     | %zu error%s in this line\n", error_list.len, error_list.len == 1 ? "" : "s");
-    printf("\n");
+        printf("%4zu | ", error_list.lineno);
+        printf("%.*s", (int)e->start, error_list.line);
+
+        printf(RED);
+        printf("%.*s", (int)(e->end - e->start),
+               error_list.line + e->start);
+        printf(RESET);
+
+        printf("%s\n", error_list.line + e->end);
+
+        printf("     | %*s", (int)e->start, "");
+
+        // The "^~~~" in red, pin pointing the error.
+        printf(RED);
+        printf("^");
+        size_t len = e->end - e->start - 1;
+        for (int i = 0; i < len; i++) {
+          printf("~");
+        }
+        printf(RESET);
+        printf("\n");
+    }
 }
 
 static void error_list_free(struct ErrorList error_list) {
@@ -420,16 +434,16 @@ static struct TokenList token_list_get(const char *s, struct ErrorList *error_li
         if (last_token_kind == NUMBER) {
           switch (str_to_num(token_str, &token.value)) {
             case NUM_INVALID:
-              error_list_add(error_list, "Invalid Number Literal", token_col);
+              error_list_add(error_list, "Invalid Number Literal", from, i);
               break;
             case NUM_OUT_RANGE:
-              error_list_add(error_list, "Number literal out of range", token_col);
+              error_list_add(error_list, "Number literal out of range", from, i);
               break;
             default:
               break;
           }
         } else if (last_token_kind == INVALID) {
-          error_list_add(error_list, "Invalid token found", token_col);
+          error_list_add(error_list, "Invalid token found", from, i);
         }
 
         if (!token_str || !token_list_add(&token_list, token)) goto fail;
@@ -584,6 +598,11 @@ uint32_t assemble(const char *s) {
 */
 
 int main(void) {
-  assemble("label__12: MVI B, 0X123gg;", 1);
+  assemble("label__12: MVI B, 0xabcgg asdasd0x21230X123\\gg;", 1);
+  assemble("label__69: MVI A, 0xdeadbeef", 2);
+  assemble("label__80081e5: MVI C, 0O9", 3);
+  assemble("label__420: MVI C, 0x123abcxyz; // invalid comment", 4);
+  assemble("no_label: NOP, 0xRETARDEDBEEF", 5);
+  assemble("no_label: NOP, abcd_efgc 0xRE_TARDEDBEEF", 5);
   return 0;
 }

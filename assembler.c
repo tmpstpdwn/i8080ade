@@ -19,6 +19,12 @@ enum TokenKind {
   INVALID,
 };
 
+enum NumParseRes {
+  NUM_VALID,
+  NUM_OUT_RANGE,
+  NUM_INVALID
+};
+
 struct Token {
   enum TokenKind kind;
   char *text;
@@ -28,6 +34,18 @@ struct Token {
 
 struct TokenList {
   struct Token *tokens;
+  size_t len, cap;
+};
+
+struct Error {
+  char *text;
+  size_t col;
+};
+
+struct ErrorList {
+  struct Error *errors;
+  char *line;
+  size_t lineno;
   size_t len, cap;
 };
 
@@ -209,9 +227,9 @@ static void to_uppercase(char *s) {
   }
 }
 
-static bool str_to_num(const char *str, uint64_t *num) {
+static enum NumParseRes str_to_num(const char *str, uint64_t *num) {
     if (!str || !*str || !num)
-        return false;
+        return NUM_INVALID;
 
     int base = 10;
     const char *p = str;
@@ -230,7 +248,7 @@ static bool str_to_num(const char *str, uint64_t *num) {
     }
 
     if (!*p)
-        return false;
+        return NUM_INVALID;
 
     if (base == 2) {
         uint64_t value = 0;
@@ -242,13 +260,13 @@ static bool str_to_num(const char *str, uint64_t *num) {
             unsigned digit = *p - '0';
 
             if (value > (UINT64_MAX - digit) / 2)
-                return false;
+                return NUM_INVALID;
 
             value = value * 2 + digit;
         }
 
         *num = value;
-        return true;
+        return NUM_VALID;
     }
 
     errno = 0;
@@ -256,11 +274,14 @@ static bool str_to_num(const char *str, uint64_t *num) {
 
     unsigned long long value = strtoull(p, &end, base);
 
-    if (errno == ERANGE || *end != '\0' || end == p)
-        return false;
+    if (errno == ERANGE)
+        return NUM_OUT_RANGE;
+
+    if (*end != '\0' || end == p)
+      return NUM_INVALID;
 
     *num = (uint64_t)value;
-    return true;
+    return NUM_VALID;
 }
 
 static enum TokenKind get_tokenkind(enum TokenKind last_token_kind, char last_token, char curr_token) {
@@ -324,7 +345,54 @@ static bool token_list_add(struct TokenList *token_list, struct Token token) {
   return true;
 }
 
-static struct TokenList get_token_list(const char *s) {
+static inline void token_list_free(struct TokenList token_list) {
+  for (int i = 0; i < token_list.len; i++) {
+    free(token_list.tokens[i].text);
+  }
+  free(token_list.tokens);
+}
+
+static struct ErrorList error_list_new(const char *line, size_t lineno) {
+  return (struct ErrorList){NULL, substr(line, 0, strlen(line)), lineno, 0, 0};
+}
+
+static void error_list_add(struct ErrorList *error_list, const char *text, size_t col) {
+  if (!error_list || !text) return;
+
+  if (error_list->len >= error_list->cap) {
+    struct Error *tmp = realloc(error_list->errors, sizeof(struct Error) * (error_list->cap + 5));
+    if (!tmp) return;
+    error_list->errors = tmp;
+    error_list->cap += 5;
+  }
+
+  char *text_s = substr(text, 0, strlen(text));
+
+  error_list->errors[error_list->len++] = (struct Error){text_s, col};
+}
+
+static void error_list_print(struct ErrorList error_list) {
+    if (!error_list.len) return;
+
+    printf("%4zu | %s\n", error_list.lineno, error_list.line);
+
+    for (size_t i = 0; i < error_list.len; i++) {
+        const struct Error *e = &error_list.errors[i];   /* still a local pointer into the array */
+        printf("     | %*s^ %s: %s\n", (int)e->col, "", "error", e->text);
+    }
+
+    printf("     | %zu error%s in this line\n", error_list.len, error_list.len == 1 ? "" : "s");
+    printf("\n");
+}
+
+static void error_list_free(struct ErrorList error_list) {
+  for (int i = 0; i < error_list.len; i++) {
+    free(error_list.errors[i].text);
+  }
+  free(error_list.errors);
+}
+
+static struct TokenList token_list_get(const char *s, struct ErrorList *error_list) {
   struct TokenList token_list = {NULL, 0, 0};
 
   if (!s) goto fail;
@@ -346,10 +414,23 @@ static struct TokenList get_token_list(const char *s) {
     if (curr_token_kind != last_token_kind || is_single_token(s[i])) {
       if (last_token_kind != NONE) {
         char *token_str = substr(s, from, i);
-        struct Token token = {last_token_kind, token_str, 0, i};
+        size_t token_col = from;
+        struct Token token = {last_token_kind, token_str, 0, token_col};
 
-        if (last_token_kind == NUMBER && !str_to_num(token_str, &token.value))
-          token.kind = INVALID;
+        if (last_token_kind == NUMBER) {
+          switch (str_to_num(token_str, &token.value)) {
+            case NUM_INVALID:
+              error_list_add(error_list, "Invalid Number Literal", token_col);
+              break;
+            case NUM_OUT_RANGE:
+              error_list_add(error_list, "Number literal out of range", token_col);
+              break;
+            default:
+              break;
+          }
+        } else if (last_token_kind == INVALID) {
+          error_list_add(error_list, "Invalid token found", token_col);
+        }
 
         if (!token_str || !token_list_add(&token_list, token)) goto fail;
       }
@@ -367,6 +448,21 @@ fail:
   return (struct TokenList){0};
 }
 
+uint32_t assemble(const char *line, size_t lineno) {
+  struct ErrorList error_list = error_list_new(line, lineno);
+
+  struct TokenList token_list = token_list_get(line, &error_list);
+
+  error_list_print(error_list);
+
+  error_list_free(error_list);
+
+  token_list_free(token_list);
+  
+  return 0;
+}
+
+/*
 uint32_t assemble(const char *s) {
   if (!s) return 0;
 
@@ -485,19 +581,9 @@ uint32_t assemble(const char *s) {
   free(text_instr);
   return asmbld_instr;
 }  
-
-static inline void free_token_list(struct TokenList token_list) {
-  free(token_list.tokens);
-}
+*/
 
 int main(void) {
-  struct TokenList token_list = get_token_list("label:mvi D, 5");
-  for (int i = 0; i < token_list.len; i++) {
-    printf("{%s,  %s,  %" PRIu64 "}\n",
-           token_list.tokens[i].text,
-           kind_names[token_list.tokens[i].kind],
-           token_list.tokens[i].value);
-  }
-  free_token_list(token_list);
+  assemble("label__12: MVI B, 0X123gg;", 1);
   return 0;
 }

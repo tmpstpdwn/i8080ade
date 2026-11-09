@@ -22,17 +22,11 @@ enum TokenKind {
   INVALID,
 };
 
-enum NumParseRes {
-  NUM_VALID,
-  NUM_OUT_RANGE,
-  NUM_INVALID
-};
-
 struct Token {
   enum TokenKind kind;
   char *text;
   uint64_t value;
-  size_t col;
+  size_t start, end;
 };
 
 struct TokenList {
@@ -230,9 +224,9 @@ static void to_uppercase(char *s) {
   }
 }
 
-static enum NumParseRes str_to_num(const char *str, uint64_t *num) {
+static bool str_to_num(const char *str, uint64_t *num) {
     if (!str || !*str || !num)
-        return NUM_INVALID;
+        return false;
 
     int base = 10;
     const char *p = str;
@@ -251,7 +245,7 @@ static enum NumParseRes str_to_num(const char *str, uint64_t *num) {
     }
 
     if (!*p)
-        return NUM_INVALID;
+        return false;;
 
     if (base == 2) {
         uint64_t value = 0;
@@ -263,13 +257,13 @@ static enum NumParseRes str_to_num(const char *str, uint64_t *num) {
             unsigned digit = *p - '0';
 
             if (value > (UINT64_MAX - digit) / 2)
-                return NUM_INVALID;
+                return false;
 
             value = value * 2 + digit;
         }
 
         *num = value;
-        return NUM_VALID;
+        return true;
     }
 
     errno = 0;
@@ -277,14 +271,11 @@ static enum NumParseRes str_to_num(const char *str, uint64_t *num) {
 
     unsigned long long value = strtoull(p, &end, base);
 
-    if (errno == ERANGE)
-        return NUM_OUT_RANGE;
-
-    if (*end != '\0' || end == p)
-      return NUM_INVALID;
+    if (errno == ERANGE || *end != '\0' || end == p)
+      return false;
 
     *num = (uint64_t)value;
-    return NUM_VALID;
+    return true;
 }
 
 static enum TokenKind get_tokenkind(enum TokenKind last_token_kind, char last_token, char curr_token) {
@@ -307,7 +298,8 @@ static enum TokenKind get_tokenkind(enum TokenKind last_token_kind, char last_to
 }
 
 static bool is_single_token(char c) {
-  return get_tokenkind(NONE, ' ', c) == PUNCTUATION;
+  enum TokenKind tokenkind = get_tokenkind(NONE, ' ', c);
+  return tokenkind == PUNCTUATION || tokenkind == INVALID;
 }
 
 static char *substr(const char *str, size_t from, size_t to) {
@@ -373,7 +365,7 @@ static void error_list_print(struct ErrorList error_list) {
 
     for (size_t i = 0; i < error_list.len; i++) {
         const struct Error *e = &error_list.errors[i];
-        printf("%zu:%zu: %serror%s: %s\n", error_list.lineno, e->start, RED, RESET, e->text);
+        printf("%zu:%zu: %serror%s: %s\n", error_list.lineno, e->start + 1, RED, RESET, e->text);
 
         printf("%4zu | ", error_list.lineno);
         printf("%.*s", (int)e->start, error_list.line);
@@ -406,7 +398,7 @@ static void error_list_free(struct ErrorList error_list) {
   free(error_list.errors);
 }
 
-static struct TokenList token_list_get(const char *s, struct ErrorList *error_list) {
+static struct TokenList tokenize(const char *s, struct ErrorList *error_list) {
   struct TokenList token_list = {NULL, 0, 0};
 
   if (!s) goto fail;
@@ -428,25 +420,22 @@ static struct TokenList token_list_get(const char *s, struct ErrorList *error_li
     if (curr_token_kind != last_token_kind || is_single_token(s[i])) {
       if (last_token_kind != NONE) {
         char *token_str = substr(s, from, i);
+        if (!token_str) goto fail;
         size_t token_col = from;
-        struct Token token = {last_token_kind, token_str, 0, token_col};
+        struct Token token = {last_token_kind, token_str, 0, from, i};
 
         if (last_token_kind == NUMBER) {
-          switch (str_to_num(token_str, &token.value)) {
-            case NUM_INVALID:
+          if (str_to_num(token_str, &token.value)) {
+            if (token.value > 0xFFFF) 
+              error_list_add(error_list, "Number literal out of the 16-bit range", from, i);
+          } else {
               error_list_add(error_list, "Invalid Number Literal", from, i);
-              break;
-            case NUM_OUT_RANGE:
-              error_list_add(error_list, "Number literal out of range", from, i);
-              break;
-            default:
-              break;
           }
         } else if (last_token_kind == INVALID) {
           error_list_add(error_list, "Invalid token found", from, i);
         }
 
-        if (!token_str || !token_list_add(&token_list, token)) goto fail;
+        if (!token_list_add(&token_list, token)) goto fail;
       }
       from = i;
     }
@@ -462,18 +451,38 @@ fail:
   return (struct TokenList){0};
 }
 
+static void parse(const struct TokenList *token_list) {
+  
+}
+
+static void check_semantics(const struct TokenList *token_list) {
+  
+}
+
+static uint32_t assemble_instr(const struct TokenList *token_list) {
+  return 0;
+}
+
 uint32_t assemble(const char *line, size_t lineno) {
   struct ErrorList error_list = error_list_new(line, lineno);
+  struct TokenList token_list;
 
-  struct TokenList token_list = token_list_get(line, &error_list);
+  uint32_t assembled_instr = 0;
 
+  token_list = tokenize(line, &error_list);
+  if (error_list.errors) goto errors;
+  parse(&token_list);
+  if (error_list.errors) goto errors;
+  check_semantics(&token_list);
+  if (error_list.errors) goto errors;
+  assembled_instr = assemble_instr(&token_list);
+
+errors:
   error_list_print(error_list);
-
   error_list_free(error_list);
-
   token_list_free(token_list);
   
-  return 0;
+  return assembled_instr;
 }
 
 /*
@@ -598,11 +607,6 @@ uint32_t assemble(const char *s) {
 */
 
 int main(void) {
-  assemble("label__12: MVI B, 0xabcgg asdasd0x21230X123\\gg;", 1);
-  assemble("label__69: MVI A, 0xdeadbeef", 2);
-  assemble("label__80081e5: MVI C, 0O9", 3);
-  assemble("label__420: MVI C, 0x123abcxyz; // invalid comment", 4);
-  assemble("no_label: NOP, 0xRETARDEDBEEF", 5);
-  assemble("no_label: NOP, abcd_efgc 0xRE_TARDEDBEEF", 5);
+  assemble("@@@@", 1);
   return 0;
 }

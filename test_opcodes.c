@@ -27,7 +27,7 @@ static void add(uint32_t expected, const char *fmt, ...) {
 
 static void run(void) {
     for (int i = 0; i < count; i++) {
-        uint32_t actual = assemble(tests[i].source);
+        uint32_t actual = assemble(tests[i].source, i);
 
         if (actual == tests[i].expected) {
             passed++;

@@ -451,67 +451,36 @@ fail:
   return (struct TokenList){0};
 }
 
-static void parse(const struct TokenList *token_list) {
-  
+static void parse(const struct TokenList *token_list, struct ErrorList *error_list) {
+  return;
 }
 
-static void check_semantics(const struct TokenList *token_list) {
-  
+static void check_semantics(const struct TokenList *token_list, struct ErrorList *error_list) {
+  return;
 }
 
 static uint32_t assemble_instr(const struct TokenList *token_list) {
-  return 0;
-}
-
-uint32_t assemble(const char *line, size_t lineno) {
-  struct ErrorList error_list = error_list_new(line, lineno);
-  struct TokenList token_list;
-
-  uint32_t assembled_instr = 0;
-
-  token_list = tokenize(line, &error_list);
-  if (error_list.errors) goto errors;
-  parse(&token_list);
-  if (error_list.errors) goto errors;
-  check_semantics(&token_list);
-  if (error_list.errors) goto errors;
-  assembled_instr = assemble_instr(&token_list);
-
-errors:
-  error_list_print(error_list);
-  error_list_free(error_list);
-  token_list_free(token_list);
-  
-  return assembled_instr;
-}
-
-/*
-uint32_t assemble(const char *s) {
-  if (!s) return 0;
-
-  size_t len = strlen(s);
-
-  if (len == 0) return 0;
-
-  char *text_instr = malloc(len);
-  if (!text_instr) return 0;
-  strcpy(text_instr, s);
-
-  char *token = strtok(text_instr, " ,");
-  if (!token) return 0;
-
   uint32_t asmbld_instr = 0;
 
   for (int i = 0; opcode_table[i].name != NULL; i++) {
-    if (strcmp(token, opcode_table[i].name) == 0) {
+    if (strcmp(token_list->tokens[0].text, opcode_table[i].name) == 0) {
       enum OpcodeType op_t = opcode_table[i].type;
       uint8_t opcode = opcode_table[i].opcode;
 
-      char *operand1 = strtok(NULL, " ,");
-      char *operand2 = strtok(NULL, " ,");
+      int operand1_c = -1;
+      int operand2_c = -1;
+      uint64_t val = 0;
 
-      int operand1_c = operand_code(operand1, op_t);
-      int operand2_c = operand_code(operand2, op_t);
+      switch (token_list->len) {
+        case 4:
+          operand2_c = operand_code(token_list->tokens[3].text, op_t);
+          val = token_list->tokens[3].value;
+        case 2:
+          operand1_c = operand_code(token_list->tokens[1].text, op_t);
+          if (!val) val = token_list->tokens[1].value;
+        default:
+          break;
+      }
 
       switch (op_t) {
         case OP_FIXED:
@@ -540,73 +509,56 @@ uint32_t assemble(const char *s) {
           asmbld_instr = opcode | (operand1_c << 4);
           break;
 
-        case OP_REG_PAIR_SP_IMM16: {
+        case OP_REG_PAIR_SP_IMM16:
           if (operand1_c == -1) break;
-
-          uint64_t val;
-          if (str_to_num(operand2, &val) == false) break;
-          if (val > UINT16_MAX) break;
-
-          uint8_t final_opcode = opcode + (operand1_c << 4);
-
-          asmbld_instr = val << 8 | final_opcode;
+          asmbld_instr = val << 8 | (opcode + (operand1_c << 4));
           break;
-        }
 
-        case OP_REG_IMM8: {
+        case OP_REG_IMM8:
           if (operand1_c == -1) break;
-
-          uint64_t val;
-          if (str_to_num(operand2, &val) == false) break;
-          if (val > UINT8_MAX) break;
-
-          uint8_t final_opcode = opcode + (operand1_c << 3);
-
-          asmbld_instr = val << 8 | final_opcode;
+          asmbld_instr = val << 8 | (opcode + (operand1_c << 3));
           break;
-        }
 
-        case OP_IMM8: {
-          uint64_t val;
-
-          if (str_to_num(operand1, &val) == false) break;
-          if (val > UINT8_MAX) break;
-
+        case OP_IMM8:
           asmbld_instr = val << 8 | opcode;
           break;
-        }
 
-        case OP_ADDR16: {
-          uint64_t val;
-
-          if (str_to_num(operand1, &val) == false) break;
-          if (val > UINT16_MAX) break;
-
+        case OP_ADDR16:
           asmbld_instr = val << 8 | opcode;
           break;
-        }
 
-        case OP_RST: {
-          uint64_t val;
-
-          if (str_to_num(operand1, &val) == false) break;
-          if (val >= 8) break;
-
+        case OP_RST:
           asmbld_instr = opcode | (val << 3);
           break;
-        }
          
         default: break;
       }
+
+      break;
     }
   }
 
-  free(text_instr);
   return asmbld_instr;
-}  
-*/
+}
 
-int main(void) {
-  assemble("@@@@", 1);
-  return 0;
+uint32_t assemble(const char *line, size_t lineno) {
+  struct ErrorList error_list = error_list_new(line, lineno);
+  struct TokenList token_list = {0};
+
+  uint32_t assembled_instr = 0;
+
+  token_list = tokenize(line, &error_list);
+  if (error_list.errors) goto errors;
+  parse(&token_list, &error_list);
+  if (error_list.errors) goto errors;
+  check_semantics(&token_list, &error_list);
+  if (error_list.errors) goto errors;
+  assembled_instr = assemble_instr(&token_list);
+
+errors:
+  error_list_print(error_list);
+  error_list_free(error_list);
+  token_list_free(token_list);
+  
+  return assembled_instr;
 }

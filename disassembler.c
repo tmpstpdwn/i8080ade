@@ -10,12 +10,12 @@ int disassemble(uint8_t *buff, size_t pc) {
 
   switch (instr) {
     case 0x00: printf("NOP\n"); break;
-    case 0x01: printf("LXI B, 0x%X%X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
+    case 0x01: printf("LXI B, 0x%02X%02X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
     case 0x02: printf("STAX B\n"); break;
     case 0x03: printf("INX B\n"); break;
     case 0x04: printf("INR B\n"); break;
     case 0x05: printf("DCR B\n"); break;
-    case 0x06: printf("MVI B, 0x%X\n", buff[pc + 1]); size = 2; break;
+    case 0x06: printf("MVI B, 0x%02X\n", buff[pc + 1]); size = 2; break;
     case 0x07: printf("RLC\n"); break;
     // 0x08 : invalid.
     case 0x09: printf("DAD B\n"); break;
@@ -23,16 +23,16 @@ int disassemble(uint8_t *buff, size_t pc) {
     case 0x0B: printf("DCX B\n"); break;
     case 0x0C: printf("INR C\n"); break;
     case 0x0D: printf("DCR C\n"); break;
-    case 0x0E: printf("MVI C, 0x%X\n", buff[pc + 1]); size = 2; break;
+    case 0x0E: printf("MVI C, 0x%02X\n", buff[pc + 1]); size = 2; break;
     case 0x0F: printf("RRC\n"); break;
 
     // 0x10 : invalid.
-    case 0x11: printf("LXI D, 0x%X%X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
+    case 0x11: printf("LXI D, 0x%02X%02X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
     case 0x12: printf("STAX D\n"); break;
     case 0x13: printf("INX D\n"); break;
     case 0x14: printf("INR D\n"); break;
     case 0x15: printf("DCR D\n"); break;
-    case 0x16: printf("MVI D, 0x%X\n", buff[pc + 1]); size = 2; break;
+    case 0x16: printf("MVI D, 0x%02X\n", buff[pc + 1]); size = 2; break;
     case 0x17: printf("RAL\n"); break;
     // 0x18 : invalid.
     case 0x19: printf("DAD D\n"); break;
@@ -40,41 +40,41 @@ int disassemble(uint8_t *buff, size_t pc) {
     case 0x1B: printf("DCX D\n"); break;
     case 0x1C: printf("INR E\n"); break;
     case 0x1D: printf("DCR E\n"); break;
-    case 0x1E: printf("MVI E, 0x%X\n", buff[pc + 1]); size = 2; break;
+    case 0x1E: printf("MVI E, 0x%02X\n", buff[pc + 1]); size = 2; break;
     case 0x1F: printf("RAR\n"); break;
 
     // 0x20 : invalid.
-    case 0x21: printf("LXI H, 0x%X%X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
-    case 0x22: printf("SHLD 0x%X%X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
+    case 0x21: printf("LXI H, 0x%02X%02X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
+    case 0x22: printf("SHLD 0x%02X%02X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
     case 0x23: printf("INX H\n"); break;
     case 0x24: printf("INR H\n"); break;
     case 0x25: printf("DCR H\n"); break;
-    case 0x26: printf("MVI H, 0x%X\n", buff[pc + 1]); size = 2; break;
+    case 0x26: printf("MVI H, 0x%02X\n", buff[pc + 1]); size = 2; break;
     case 0x27: printf("DAA\n"); break;
     // 0x28 : invalid.
     case 0x29: printf("DAD H\n"); break;
-    case 0x2A: printf("LHLD 0x%X%X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
+    case 0x2A: printf("LHLD 0x%02X%02X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
     case 0x2B: printf("DCX H\n"); break;
     case 0x2C: printf("INR L\n"); break;
     case 0x2D: printf("DCR L\n"); break;
-    case 0x2E: printf("MVI L, 0x%X\n", buff[pc + 1]); size = 2; break;
+    case 0x2E: printf("MVI L, 0x%02X\n", buff[pc + 1]); size = 2; break;
     case 0x2F: printf("CMA\n"); break;
 
     // 0x30 : invalid.
-    case 0x31: printf("LXI SP, 0x%X%X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
-    case 0x32: printf("STA 0x%X%X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
+    case 0x31: printf("LXI SP, 0x%02X%02X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
+    case 0x32: printf("STA 0x%02X%02X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
     case 0x33: printf("INX SP\n"); break;
     case 0x34: printf("INR M\n"); break;
     case 0x35: printf("DCR M\n"); break;
-    case 0x36: printf("MVI M, 0x%X\n", buff[pc + 1]); size = 2; break;
+    case 0x36: printf("MVI M, 0x%02X\n", buff[pc + 1]); size = 2; break;
     case 0x37: printf("STC\n"); break;
     // 0x38 : invalid.
     case 0x39: printf("DAD SP\n"); break;
-    case 0x3A: printf("LDA 0x%X%X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
+    case 0x3A: printf("LDA 0x%02X%02X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
     case 0x3B: printf("DCX SP\n"); break;
     case 0x3C: printf("INR A\n"); break;
     case 0x3D: printf("DCR A\n"); break;
-    case 0x3E: printf("MVI A, 0x%X\n", buff[pc + 1]); size = 2; break;
+    case 0x3E: printf("MVI A, 0x%02X\n", buff[pc + 1]); size = 2; break;
     case 0x3F: printf("CMC\n"); break;
 
     case 0x40: printf("MOV B, B\n"); break;
@@ -99,7 +99,7 @@ int disassemble(uint8_t *buff, size_t pc) {
     case 0x51: printf("MOV D, C\n"); break;
     case 0x52: printf("MOV D, D\n"); break;
     case 0x53: printf("MOV D, E\n"); break;
-    case 0x54: printf("MOV D, L\n"); break;
+    case 0x54: printf("MOV D, H\n"); break;
     case 0x55: printf("MOV D, L\n"); break;
     case 0x56: printf("MOV D, M\n"); break;
     case 0x57: printf("MOV D, A\n"); break;
@@ -225,73 +225,73 @@ int disassemble(uint8_t *buff, size_t pc) {
 
     case 0xC0: printf("RNZ\n"); break;
     case 0xC1: printf("POP B\n"); break;
-    case 0xC2: printf("JNZ 0x%X%X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
-    case 0xC3: printf("JMP 0x%X%X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
-    case 0xC4: printf("CNZ 0x%X%X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
+    case 0xC2: printf("JNZ 0x%02X%02X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
+    case 0xC3: printf("JMP 0x%02X%02X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
+    case 0xC4: printf("CNZ 0x%02X%02X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
     case 0xC5: printf("PUSH B\n"); break;
-    case 0xC6: printf("ADI 0x%X\n", buff[pc + 1]); size = 2; break;
+    case 0xC6: printf("ADI 0x%02X\n", buff[pc + 1]); size = 2; break;
     case 0xC7: printf("RST 0\n"); break;
     case 0xC8: printf("RZ\n"); break;
     case 0xC9: printf("RET\n"); break;
-    case 0xCA: printf("JZ 0x%X%X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
+    case 0xCA: printf("JZ 0x%02X%02X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
     // 0xCB : invalid.
-    case 0xCC: printf("CZ 0x%X%X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
-    case 0xCD: printf("CALL 0x%X%X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
-    case 0xCE: printf("ACI 0x%X\n", buff[pc + 1]); size = 2; break;
+    case 0xCC: printf("CZ 0x%02X%02X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
+    case 0xCD: printf("CALL 0x%02X%02X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
+    case 0xCE: printf("ACI 0x%02X\n", buff[pc + 1]); size = 2; break;
     case 0xCF: printf("RST 1\n"); break;
 
     case 0xD0: printf("RNC\n"); break;
     case 0xD1: printf("POP D\n"); break;
-    case 0xD2: printf("JNC 0x%X%X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
-    case 0xD3: printf("OUT 0x%X\n", buff[pc + 1]); size = 2; break;
-    case 0xD4: printf("CNC 0x%X%X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
+    case 0xD2: printf("JNC 0x%02X%02X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
+    case 0xD3: printf("OUT 0x%02X\n", buff[pc + 1]); size = 2; break;
+    case 0xD4: printf("CNC 0x%02X%02X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
     case 0xD5: printf("PUSH D\n"); break;
-    case 0xD6: printf("SUI 0x%X\n", buff[pc + 1]); size = 2; break;
+    case 0xD6: printf("SUI 0x%02X\n", buff[pc + 1]); size = 2; break;
     case 0xD7: printf("RST 2\n"); break;
     case 0xD8: printf("RC\n"); break;
     // 0xD9 : invalid.
-    case 0xDA: printf("JC 0x%X%X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
-    case 0xDB: printf("IN 0x%X\n", buff[pc + 1]); size = 2; break;
-    case 0xDC: printf("CC 0x%X%X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
+    case 0xDA: printf("JC 0x%02X%02X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
+    case 0xDB: printf("IN 0x%02X\n", buff[pc + 1]); size = 2; break;
+    case 0xDC: printf("CC 0x%02X%02X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
     // 0xDD : invalid.
-    case 0xDE: printf("SBI 0x%X\n", buff[pc + 1]); size = 2; break;
+    case 0xDE: printf("SBI 0x%02X\n", buff[pc + 1]); size = 2; break;
     case 0xDF: printf("RST 3\n"); break;
 
     case 0xE0: printf("RPO\n"); break;
     case 0xE1: printf("POP H\n"); break;
-    case 0xE2: printf("JPO 0x%X%X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
+    case 0xE2: printf("JPO 0x%02X%02X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
     case 0xE3: printf("XTHL\n"); break;
-    case 0xE4: printf("CPO 0x%X%X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
+    case 0xE4: printf("CPO 0x%02X%02X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
     case 0xE5: printf("PUSH H\n"); break;
-    case 0xE6: printf("ANI 0x%X\n", buff[pc + 1]); size = 2; break;
+    case 0xE6: printf("ANI 0x%02X\n", buff[pc + 1]); size = 2; break;
     case 0xE7: printf("RST 4\n"); break;
     case 0xE8: printf("RPE\n"); break;
-    case 0xE9: printf("PCHIL\n"); break;
-    case 0xEA: printf("JPE 0x%X%X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
+    case 0xE9: printf("PCHL\n"); break;
+    case 0xEA: printf("JPE 0x%02X%02X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
     case 0xEB: printf("XCHG\n"); break;
-    case 0xEC: printf("CPE 0x%X%X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
+    case 0xEC: printf("CPE 0x%02X%02X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
     // 0xED : invalid.
-    case 0xEE: printf("XRI 0x%X\n", buff[pc + 1]); size = 2; break;
+    case 0xEE: printf("XRI 0x%02X\n", buff[pc + 1]); size = 2; break;
     case 0xEF: printf("RST 5\n"); break;
 
     case 0xF0: printf("RP\n"); break;
     case 0xF1: printf("POP PSW\n"); break;
-    case 0xF2: printf("JP 0x%X%X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
+    case 0xF2: printf("JP 0x%02X%02X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
     case 0xF3: printf("DI\n"); break;
-    case 0xF4: printf("CP 0x%X%X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
+    case 0xF4: printf("CP 0x%02X%02X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
     case 0xF5: printf("PUSH PSW\n"); break;
-    case 0xF6: printf("ORI 0x%X\n", buff[pc + 1]); size = 2; break;
+    case 0xF6: printf("ORI 0x%02X\n", buff[pc + 1]); size = 2; break;
     case 0xF7: printf("RST 6\n"); break;
     case 0xF8: printf("RM\n"); break;
     case 0xF9: printf("SPHL\n"); break;
-    case 0xFA: printf("JM 0x%X%X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
+    case 0xFA: printf("JM 0x%02X%02X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
     case 0xFB: printf("EI\n"); break;
-    case 0xFC: printf("CM 0x%X%X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
+    case 0xFC: printf("CM 0x%02X%02X\n", buff[pc + 2], buff[pc + 1]); size = 3; break;
     // 0xFD : invalid.
-    case 0xFE: printf("CPI 0x%X\n", buff[pc + 1]); size = 2; break;
+    case 0xFE: printf("CPI 0x%02X\n", buff[pc + 1]); size = 2; break;
     case 0xFF: printf("RST 7\n"); break;
 
-    default: break;
+    default: printf("NOP\n");
   }
 
   return size;

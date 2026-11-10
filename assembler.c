@@ -1,6 +1,7 @@
 #include <errno.h>
 #include <ctype.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <string.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -314,7 +315,7 @@ static enum TokenKind get_tokenkind(enum TokenKind last_token_kind, char curr_to
   }
 
   if (curr_token == ',') return TK_PUNCT;
-  else if (curr_token == ' ') return TK_NONE;
+  else if (isspace(curr_token)) return TK_NONE;
 
   return TK_INVALID;
 }
@@ -593,53 +594,65 @@ static uint32_t assemble_instr(struct ParsedInstr parsed_instr) {
 
   uint16_t number = parsed_instr.number;
 
+  uint8_t size = 0;
+
   switch (op_t) {
     case OP_FIXED:
       asmbld_instr = opcode;
+      size = 1;
       break;
 
     case OP_REG_REG:
       asmbld_instr = opcode | (register1_c << 3) | register2_c;
+      size = 1;
       break;
 
     case OP_REG_ID:
       asmbld_instr = opcode | (register1_c << 3);
+      size = 1;
       break;
 
     case OP_REG_ARITH:
       asmbld_instr = opcode | register1_c;
+      size = 1;
       break;
 
     case OP_REG_PAIR_SP:
     case OP_REG_PAIR_BD:
     case OP_REG_PAIR_PSW:
       asmbld_instr = opcode | (register1_c << 4);
+      size = 1;
       break;
 
     case OP_REG_PAIR_SP_IMM16:
       asmbld_instr = number << 8 | (opcode + (register1_c << 4));
+      size = 3;
       break;
 
     case OP_REG_IMM8:
       asmbld_instr = number << 8 | (opcode + (register1_c << 3));
+      size = 2;
       break;
 
     case OP_IMM8:
       asmbld_instr = number << 8 | opcode;
+      size = 2;
       break;
 
     case OP_ADDR16:
       asmbld_instr = number << 8 | opcode;
+      size = 3;
       break;
 
     case OP_RST:
       asmbld_instr = opcode | (number << 3);
+      size = 1;
       break;
      
     default: break;
   }
 
-  return asmbld_instr;
+  return (size << 24) | asmbld_instr;
 }
 
 uint32_t assemble(const char *line, size_t lineno) {

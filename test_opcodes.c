@@ -27,7 +27,8 @@ static void add(uint32_t expected, const char *fmt, ...) {
 
 static void run(void) {
     for (int i = 0; i < count; i++) {
-        uint32_t actual = assemble(tests[i].source, i);
+        // First byte gives the length.
+        uint32_t actual = assemble(tests[i].source, i) & 0x00FFFFFF;
 
         if (actual == tests[i].expected) {
             passed++;
@@ -89,7 +90,7 @@ static void test_single(void) {
 
 static void test_pairs(void) {
     for (int i = 0; i < 4; i++) {
-        add((0x1234 << 8) | (0x01 | (i << 4)), "LXI %s, 0x1234", pairs[i]);
+        add((0x2400 << 8) | (0x01 | (i << 4)), "LXI %s, 0x2400", pairs[i]);
         add(0x03 | (i << 4), "INX %s", pairs[i]);
         add(0x0B | (i << 4), "DCX %s", pairs[i]);
         add(0x09 | (i << 4), "DAD %s", pairs[i]);

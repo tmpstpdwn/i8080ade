@@ -700,7 +700,6 @@ bool assemble_rom(char *read_from, char *write_to) {
   while ((line_i = readline(fpr, &line, &line_len)) >= 0) {
     if (line_i == 0) {
       line_no++;
-      printf("hi\n");
       continue;      
     }
 
@@ -714,13 +713,15 @@ bool assemble_rom(char *read_from, char *write_to) {
 
     while (size) {
       if (buffer_i >= buffer_len) {
-        uint8_t *tmp = realloc(buffer, sizeof(uint8_t) * (buffer_len + 2048));
+        size_t new_len = (buffer_len == 0)? 2048: buffer_len * 2;
+        uint8_t *tmp = realloc(buffer, sizeof(uint8_t) * new_len);
         if (!tmp) {
-          free(buffer);
-          return false;
+          printf("%serror%s: Rom buffer malloc failed\n", RED, RESET);
+          errors += 1;
+          goto end;
         }
         buffer = tmp;
-        buffer_len += 2048;
+        buffer_len = new_len;
       }
       buffer[buffer_i++] = assembled_instr & 0xFF;
       assembled_instr = assembled_instr >> 8;
@@ -729,8 +730,9 @@ bool assemble_rom(char *read_from, char *write_to) {
   }
 
   if (line_i == -2) {
-    printf("Readline Failed\n");
-    return false;
+    printf("%serror%s: Readline failed\n", RED, RESET);
+    errors += 1;
+    goto end;
   }
 
   if (errors) {
@@ -740,15 +742,16 @@ bool assemble_rom(char *read_from, char *write_to) {
 
     if (!fpw) {
       printf("Opening file \'%s\' failed.\n", write_to);
-      errors = 1;
+      errors += 1;
     } else {
       fwrite(buffer, sizeof(uint8_t), buffer_i, fpw);
       fclose(fpw);
     }
-
   }
 
+end:
   fclose(fpr);
+  free(line);
   free(buffer);
   return !errors;
 }

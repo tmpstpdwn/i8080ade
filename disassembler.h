@@ -1,9 +1,10 @@
 #ifndef DISASSEMBLER_H
 #define DISASSEMBLER_H
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
 
-int disassemble(uint8_t *buff, size_t pc);
+bool disassemble_rom(const char *read_from);
 
 #endif

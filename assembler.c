@@ -8,6 +8,7 @@
 #include <stdio.h>
 
 #include "assembler.h"
+#include "utils.h"
 
 #define RED   "\033[31m"
 #define RESET "\033[0m"
@@ -674,4 +675,80 @@ errors:
   token_list_free(token_list);
   
   return assembled_instr;
+}
+
+bool assemble_rom(char *read_from, char *write_to) {
+  char *line = NULL;
+  size_t line_len = 0;
+
+  uint8_t *buffer = NULL;
+  size_t buffer_i = 0;
+  size_t buffer_len = 0;
+
+  int line_no = 1;
+  int line_i = 0;
+
+  int errors = 0;
+
+  FILE *fpr = fopen(read_from, "rb");
+
+  if (!fpr) {
+    printf("Opening file \'%s\' failed.\n", read_from);
+    return false;
+  }
+
+  while ((line_i = readline(fpr, &line, &line_len)) >= 0) {
+    if (line_i == 0) {
+      line_no++;
+      printf("hi\n");
+      continue;      
+    }
+
+    uint32_t assembled_instr = assemble(line, line_no++);
+    uint8_t size = (assembled_instr & 0xFF000000) >> 24;
+
+    if (!size) {
+      errors++;
+      continue;
+    }
+
+    while (size) {
+      if (buffer_i >= buffer_len) {
+        uint8_t *tmp = realloc(buffer, sizeof(uint8_t) * (buffer_len + 2048));
+        if (!tmp) {
+          free(buffer);
+          return false;
+        }
+        buffer = tmp;
+        buffer_len += 2048;
+      }
+      buffer[buffer_i++] = assembled_instr & 0xFF;
+      assembled_instr = assembled_instr >> 8;
+      size--;
+    }
+  }
+
+  if (line_i == -2) {
+    printf("Readline Failed\n");
+    return false;
+  }
+
+  if (errors) {
+    printf("Assembly failed: %d errors\n", errors);
+  } else {
+    FILE *fpw = fopen(write_to, "wb");
+
+    if (!fpw) {
+      printf("Opening file \'%s\' failed.\n", write_to);
+      errors = 1;
+    } else {
+      fwrite(buffer, sizeof(uint8_t), buffer_i, fpw);
+      fclose(fpw);
+    }
+
+  }
+
+  fclose(fpr);
+  free(buffer);
+  return !errors;
 }

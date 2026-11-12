@@ -32,6 +32,7 @@ enum SyntaxKind {
 };
 
 enum OpcodeType {
+  OP_NONE,
   OP_FIXED,
   OP_REG_REG,
   OP_REG_ID, // INR, DCR
@@ -461,6 +462,7 @@ static struct TokenList tokenize(const char *s, struct ErrorList *error_list) {
         if (!token_list_add(&token_list, last_token_kind, token_str, value, from, i)) goto fail;
       }
       from = i;
+      if (s[i] == ';') break; // handle comments.
     }
 
     last_token_kind = curr_token_kind;
@@ -602,6 +604,9 @@ static uint32_t assemble_instr(struct ParsedInstr parsed_instr) {
   uint8_t size = 0;
 
   switch (op_t) {
+    case OP_NONE:
+      break;
+
     case OP_FIXED:
       asmbld_instr = opcode;
       size = 1;
@@ -653,8 +658,6 @@ static uint32_t assemble_instr(struct ParsedInstr parsed_instr) {
       asmbld_instr = opcode | (number << 3);
       size = 1;
       break;
-     
-    default: break;
   }
 
   return (size << 24) | asmbld_instr;
@@ -664,8 +667,8 @@ static uint32_t assemble_instr(struct ParsedInstr parsed_instr) {
 -> Returns a uint32_t packed as [size_byte, instr_byte_3, instr_byte_2, instr_byte_1]
    i.e The first byte gives the instruction size, rest 3 bytes gives the instruction itself.
 -> This works as instructions can atmost only be 3 bytes long.
--> Returns 0 when there is an error in the assembly pipeline.
--> For the instruction "NOP", it will return 0x01000000.
+-> Returns 0 in case of an input with no tokens.
+-> sets the size byte to 0xFF in case of an error in the assembly pipeline.
 */
 uint32_t assemble(const char *line, size_t lineno) {
   struct ErrorList error_list = error_list_new(line, lineno);
@@ -682,7 +685,7 @@ uint32_t assemble(const char *line, size_t lineno) {
 
 cleanup:
   if (error_list.errors) {
-    assembled_instr = 0;
+    assembled_instr = 0xFF000000;
     error_list_print(error_list);
   }
 
@@ -713,15 +716,10 @@ bool assemble_rom(char *read_from, char *write_to) {
   }
 
   while ((line_i = readline(fpr, &line, &line_len)) >= 0) {
-    if (line_i == 0) {
-      line_no++;
-      continue;      
-    }
-
     uint32_t assembled_instr = assemble(line, line_no++);
     uint8_t size = (assembled_instr & 0xFF000000) >> 24;
 
-    if (!size) {
+    if (size == 0xFF) {
       errors++;
       continue;
     }

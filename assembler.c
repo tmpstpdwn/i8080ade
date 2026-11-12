@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <errno.h>
 #include <ctype.h>
 #include <stddef.h>
@@ -33,13 +34,13 @@ enum SyntaxKind {
 enum OpcodeType {
   OP_FIXED,
   OP_REG_REG,
-  OP_REG_ID, // INR, DCR.
-  OP_REG_ARITH, // Arithmetic.
+  OP_REG_ID, // INR, DCR
+  OP_REG_ARITH, // Arithmetic
   OP_REG_PAIR_SP,
   OP_REG_PAIR_BD,
   OP_REG_PAIR_PSW,
-  OP_REG_PAIR_SP_IMM16,
-  OP_REG_IMM8,
+  OP_REG_PAIR_SP_IMM16, // LXI
+  OP_REG_IMM8, // MVI
   OP_IMM8,
   OP_ADDR16,
   OP_RST
@@ -197,7 +198,7 @@ static int register_code(const char *reg, enum OpcodeType op_t) {
   int n = -1;
 
   if (reg_len == 1) {
-    switch (*reg_upper) {
+    switch (reg_upper[0]) {
       case 'B':
         n = 0; break;
       case 'C':
@@ -226,7 +227,7 @@ static int register_code(const char *reg, enum OpcodeType op_t) {
         return n;
 
     case OP_REG_PAIR_BD: {
-        if (n != -1 && n % 2 == 0 && n < 4)
+        if (n >= 0 && n <= 2 && n % 2 == 0)
           return n / 2;
         return -1;
     }
@@ -234,7 +235,7 @@ static int register_code(const char *reg, enum OpcodeType op_t) {
     case OP_REG_PAIR_SP:
     case OP_REG_PAIR_SP_IMM16:
     case OP_REG_PAIR_PSW: {
-        if (n != -1 && n % 2 == 0 && n < 6) {
+        if (n >= 0 && n <= 4 && n % 2 == 0) {
           return n / 2;
         } else {
           char *s = (op_t == OP_REG_PAIR_PSW)? "PSW": "SP";
@@ -248,58 +249,46 @@ static int register_code(const char *reg, enum OpcodeType op_t) {
   }
 }
 
-static bool str_to_num(const char *str, uint64_t *num) {
+enum NumParseRes {
+  NUM_OK,
+  NUM_OVERFLOW,
+  NUM_INVALID
+};
+
+static enum NumParseRes str_to_num(const char *str, uint64_t *num) {
   if (!str || !*str || !num)
-    return false;
+    return NUM_INVALID;
 
   int base = 10;
   const char *p = str;
 
-  if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) {
-    base = 16;
-    p += 2;
-  }
-  else if (p[0] == '0' && (p[1] == 'b' || p[1] == 'B')) {
-    base = 2;
-    p += 2;
-  }
-  else if (p[0] == '0' && (p[1] == 'o' || p[1] == 'O')) {
-    base = 8;
-    p += 2;
+  if (p[0] == '0' && p[1]) {
+    switch (tolower((unsigned char)p[1])) {
+      case 'x': base = 16; break;
+      case 'b': base = 2;  break;
+      case 'o': base = 8;  break;
+    }
+
+    if (base != 10)
+      p += 2;
   }
 
   if (!*p)
-    return false;;
-
-  if (base == 2) {
-    uint64_t value = 0;
-
-    for (; *p; p++) {
-        if (*p != '0' && *p != '1')
-            return false;
-
-        unsigned digit = *p - '0';
-
-        if (value > (UINT64_MAX - digit) / 2)
-            return false;
-
-        value = value * 2 + digit;
-    }
-
-    *num = value;
-    return true;
-  }
+    return NUM_INVALID;
 
   errno = 0;
   char *end;
 
   unsigned long long value = strtoull(p, &end, base);
 
-  if (errno == ERANGE || *end != '\0' || end == p)
-    return false;
+  if (errno == ERANGE || value > UINT64_MAX)
+    return NUM_OVERFLOW;
+
+  if (end == p || *end != '\0')
+    return NUM_INVALID;
 
   *num = (uint64_t)value;
-  return true;
+  return NUM_OK;
 }
 
 static enum TokenKind get_tokenkind(enum TokenKind last_token_kind, char curr_token) {
@@ -346,7 +335,7 @@ static char *substr(const char *str, size_t from, size_t to) {
   return substr;
 }
 
-static bool token_list_add(struct TokenList *token_list, struct Token token) {
+static bool token_list_add(struct TokenList *token_list, enum TokenKind kind, char* text, uint64_t value, size_t start, size_t end) {
   if (token_list->len >= token_list->cap) {
     struct Token *tmp = realloc(token_list->tokens, sizeof(struct Token) * (token_list->cap + 5));
     if (!tmp) return false;
@@ -354,7 +343,7 @@ static bool token_list_add(struct TokenList *token_list, struct Token token) {
     token_list->cap += 5;
   }
 
-  token_list->tokens[token_list->len++] = token;
+  token_list->tokens[token_list->len++] = (struct Token){kind, text, value, start, end};
 
   return true;
 }
@@ -452,20 +441,24 @@ static struct TokenList tokenize(const char *s, struct ErrorList *error_list) {
       if (last_token_kind != TK_NONE) {
         char *token_str = substr(s, from, i);
         if (!token_str) goto fail;
-        struct Token token = {last_token_kind, token_str, 0, from, i};
+        uint64_t value = 0;
 
         if (last_token_kind == TK_NUM) {
-          if (str_to_num(token_str, &token.value)) {
-            if (token.value > 0xFFFF) 
-              error_list_add(error_list, "Number literal out of the 16-bit range", from, i);
-          } else {
-              error_list_add(error_list, "Invalid Number Literal", from, i);
+          switch (str_to_num(token_str, &value)) {
+            case NUM_INVALID:
+              error_list_add(error_list, "Invalid numeric literal", from, i);
+              break;
+            case NUM_OVERFLOW:
+              error_list_add(error_list, "Numeric literal is out of range", from, i);
+              break;
+            case NUM_OK:
+              break;
           }
         } else if (last_token_kind == TK_INVALID) {
-          error_list_add(error_list, "Invalid token found", from, i);
+          error_list_add(error_list, "Unrecognized token", from, i);
         }
 
-        if (!token_list_add(&token_list, token)) goto fail;
+        if (!token_list_add(&token_list, last_token_kind, token_str, value, from, i)) goto fail;
       }
       from = i;
     }
@@ -483,8 +476,8 @@ fail:
 static bool get_oprec(const char *mnemonic, struct OpRec *oprec) {
   if (!mnemonic) return false;
 
-  int mnuemonic_len = strlen(mnemonic);
-  if (mnuemonic_len == 0 || mnuemonic_len > 4) return false;
+  int mnemonic_len = strlen(mnemonic);
+  if (mnemonic_len == 0 || mnemonic_len > 4) return false;
 
   char mnemonic_upper[5] = {0};
   int i = 0;
@@ -512,7 +505,7 @@ static struct ParsedInstr parse(const struct TokenList *token_list, struct Error
 
   struct Token *opcode_token = &token_list->tokens[0];
   if (opcode_token->kind != TK_IDENT || !get_oprec(opcode_token->text, &oprec)) {
-    error_list_add(error_list, "Invalid opcode mnuemonic", opcode_token->start, opcode_token->end);
+    error_list_add(error_list, "Unknown opcode mnemonic", opcode_token->start, opcode_token->end);
     goto fail;
   }
 
@@ -521,7 +514,7 @@ static struct ParsedInstr parse(const struct TokenList *token_list, struct Error
   for (size_t i = 0; ; i++) {
     struct Token *token = (i < token_list->len)? &token_list->tokens[i]: NULL;
     if (syntax_array[i] != SK_END && !token) {
-      error_list_add(error_list, "Incomplete instruction, More tokens expected!!!", 0, token_list->tokens[token_list->len - 1].end);
+      error_list_add(error_list, "Incomplete instruction, expected more operands", 0, token_list->tokens[token_list->len - 1].end);
       goto fail;
     }
 
@@ -533,7 +526,7 @@ static struct ParsedInstr parse(const struct TokenList *token_list, struct Error
 
       case SK_COMMA:
         if (token->kind != TK_PUNCT) {
-          error_list_add(error_list, "Expected a comma \',\'", token->start, token->end);
+          error_list_add(error_list, "Expected \',\' between operands", token->start, token->end);
           goto fail;
         }
         break;
@@ -557,7 +550,7 @@ static struct ParsedInstr parse(const struct TokenList *token_list, struct Error
       case SK_REG: {
         int register_c = register_code(token->text, oprec.type);
         if (register_c == -1) {
-          error_list_add(error_list, "Invalid token, expected a register", token->start, token->end);
+          error_list_add(error_list, "Expected a register", token->start, token->end);
           goto fail;
         }
         if (i == 1)
@@ -569,7 +562,7 @@ static struct ParsedInstr parse(const struct TokenList *token_list, struct Error
 
       case SK_END:
         if (token) {
-          error_list_add(error_list, "Extra tokens recieved", token->start, token_list->tokens[token_list->len - 1].end);
+          error_list_add(error_list, "Unexpected trailing tokens", token->start, token_list->tokens[token_list->len - 1].end);
           goto fail;
         }
         return parsed_instr;
@@ -578,7 +571,6 @@ static struct ParsedInstr parse(const struct TokenList *token_list, struct Error
         break;
     }
   }
-
 
 fail:
   return (struct ParsedInstr){0};

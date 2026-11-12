@@ -310,7 +310,7 @@ static enum TokenKind get_tokenkind(enum TokenKind last_token_kind, char curr_to
   return TK_INVALID;
 }
 
-static bool is_single_token(char c) {
+static inline bool is_single_token(char c) {
   enum TokenKind tokenkind = get_tokenkind(TK_NONE, c);
   return tokenkind == TK_PUNCT || tokenkind == TK_INVALID;
 }
@@ -355,7 +355,7 @@ static inline void token_list_free(struct TokenList token_list) {
   free(token_list.tokens);
 }
 
-static struct ErrorList error_list_new(const char *line, size_t lineno) {
+static inline struct ErrorList error_list_new(const char *line, size_t lineno) {
   return (struct ErrorList){NULL, substr(line, 0, strlen(line)), lineno, 0, 0};
 }
 
@@ -398,7 +398,7 @@ static void error_list_print(struct ErrorList error_list) {
         printf("^");
 
         size_t len;
-        if (e->end >= e->start)
+        if (e->start >= e->end)
           len = 0;
         else
           len = e->end - e->start - 1;
@@ -533,7 +533,7 @@ static struct ParsedInstr parse(const struct TokenList *token_list, struct Error
 
       case SK_NUM16:
         if (token->kind != TK_NUM || token->value > 0xFFFF) {
-          error_list_add(error_list, "Expected a value within the range 0x0000 - 0xFFFF", token->start, token->end);
+          error_list_add(error_list, "Expected a value within the range 0x0000 - 0xFFFF (16-bit)", token->start, token->end);
           goto fail;
         }
         parsed_instr.number = token->value;
@@ -541,9 +541,15 @@ static struct ParsedInstr parse(const struct TokenList *token_list, struct Error
 
       case SK_NUM8:
         if (token->kind != TK_NUM || token->value > 0xFF) {
-          error_list_add(error_list, "Expected a value within the range 0x00 - 0xFF", token->start, token->end);
+          error_list_add(error_list, "Expected a value within the range 0x00 - 0xFF (8-bit)", token->start, token->end);
           goto fail;
         }
+
+        if (oprec.type == OP_RST && token->value > 7) {
+          error_list_add(error_list, "Expected a value within the range 0x00 - 0x07 (3-bit)", token->start, token->end);
+          goto fail;
+        }
+
         parsed_instr.number = token->value;
         break;
 
@@ -553,10 +559,16 @@ static struct ParsedInstr parse(const struct TokenList *token_list, struct Error
           error_list_add(error_list, "Expected a register", token->start, token->end);
           goto fail;
         }
-        if (i == 1)
+        if (i == 1) {
           parsed_instr.register1_c = register_c;
-        else
+        }
+        else {
+          if (parsed_instr.register1_c == 6 && register_c == 6) {
+            error_list_add(error_list, "Expected registers are B, C, D, E, H, L or A", token->start, token->end);
+            goto fail;
+          }
           parsed_instr.register2_c = register_c;
+        }
         break;
       }
 
@@ -648,6 +660,13 @@ static uint32_t assemble_instr(struct ParsedInstr parsed_instr) {
   return (size << 24) | asmbld_instr;
 }
 
+/*
+-> Returns a uint32_t packed as [size_byte, instr_byte_3, instr_byte_2, instr_byte_1]
+   i.e The first byte gives the instruction size, rest 3 bytes gives the instruction itself.
+-> This works as instructions can atmost only be 3 bytes long.
+-> Returns 0 when there is an error in the assembly pipeline.
+-> For the instruction "NOP", it will return 0x01000000.
+*/
 uint32_t assemble(const char *line, size_t lineno) {
   struct ErrorList error_list = error_list_new(line, lineno);
   struct TokenList token_list = {0};
@@ -656,13 +675,17 @@ uint32_t assemble(const char *line, size_t lineno) {
   uint32_t assembled_instr = 0;
 
   token_list = tokenize(line, &error_list);
-  if (error_list.errors) goto errors;
+  if (error_list.errors) goto cleanup;
   parsed_instr = parse(&token_list, &error_list);
-  if (error_list.errors) goto errors;
+  if (error_list.errors) goto cleanup;
   assembled_instr = assemble_instr(parsed_instr);
 
-errors:
-  error_list_print(error_list);
+cleanup:
+  if (error_list.errors) {
+    assembled_instr = 0;
+    error_list_print(error_list);
+  }
+
   error_list_free(error_list);
   token_list_free(token_list);
   

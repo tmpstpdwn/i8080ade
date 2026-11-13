@@ -11,6 +11,9 @@
 #include "assembler.h"
 #include "utils.h"
 
+#define LABELS_ARR_BASE_SZ 10
+#define ROM_BUFF_BASE_SZ 2048
+
 #define RED   "\033[31m"
 #define RESET "\033[0m"
 
@@ -20,6 +23,12 @@ enum TokenKind {
   TK_PUNCT,
   TK_NUM,
   TK_INVALID,
+};
+
+enum NumParseRes {
+  NUM_OK,
+  NUM_OVERFLOW,
+  NUM_INVALID
 };
 
 enum SyntaxKind {
@@ -77,6 +86,11 @@ struct ParsedInstr {
   uint8_t register1_c;
   uint8_t register2_c;
   uint16_t number;
+};
+
+struct Label {
+  char *text;
+  uint16_t addr;
 };
 
 struct OpRec {
@@ -182,6 +196,42 @@ static struct OpRec opcode_table[] = {
   {NULL}
 };
 
+static struct Label *labels = NULL;
+static size_t labels_len = 0;
+static size_t labels_cap = 0;
+
+static int add_label(const char *text, uint16_t addr) {
+  if (labels_len == labels_cap) {
+    size_t new_cap = labels_cap == 0 ? LABELS_ARR_BASE_SZ : labels_cap * 2;
+
+    struct Label *tmp = realloc(labels, new_cap * sizeof(*labels));
+    if (tmp == NULL)
+      return -1;
+
+    labels = tmp;
+    labels_cap = new_cap;
+  }
+
+  char *copy = strdup(text);
+  if (copy == NULL)
+    return -1;
+
+  labels[labels_len].text = copy;
+  labels[labels_len].addr = addr;
+  labels_len++;
+
+  return 0;
+}
+
+static int get_label(const char *text) {
+  for (size_t i = 0; i < labels_len; i++) {
+    if (strcmp(labels[i].text, text) == 0)
+      return labels[i].addr;
+  }
+
+  return -1;
+}
+
 static int register_code(const char *reg, enum OpcodeType op_t) {
   if (!reg) return -1;
 
@@ -250,12 +300,6 @@ static int register_code(const char *reg, enum OpcodeType op_t) {
   }
 }
 
-enum NumParseRes {
-  NUM_OK,
-  NUM_OVERFLOW,
-  NUM_INVALID
-};
-
 static enum NumParseRes str_to_num(const char *str, uint64_t *num) {
   if (!str || !*str || !num)
     return NUM_INVALID;
@@ -305,7 +349,7 @@ static enum TokenKind get_tokenkind(enum TokenKind last_token_kind, char curr_to
     return TK_NUM;
   }
 
-  if (curr_token == ',') return TK_PUNCT;
+  if (curr_token == ',' || curr_token == ':') return TK_PUNCT;
   else if (isspace(curr_token)) return TK_NONE;
 
   return TK_INVALID;
@@ -395,19 +439,17 @@ static void error_list_print(struct ErrorList error_list) {
         printf("     | %*s", (int)e->start, "");
 
         // The "^~~~" in red, pin pointing the error.
-        printf(RED);
-        printf("^");
+        if (e->start < e->end) {
+          printf(RED);
+          printf("^");
+          size_t len = e->end - e->start - 1;
 
-        size_t len;
-        if (e->start >= e->end)
-          len = 0;
-        else
-          len = e->end - e->start - 1;
+          for (size_t i = 0; i < len; i++) {
+            printf("~");
+          }
 
-        for (size_t i = 0; i < len; i++) {
-          printf("~");
+          printf(RESET);
         }
-        printf(RESET);
         printf("\n");
     }
 }
@@ -500,8 +542,11 @@ static bool get_oprec(const char *mnemonic, struct OpRec *oprec) {
 }
 
 static struct ParsedInstr parse(const struct TokenList *token_list, struct ErrorList *error_list) {
+  if (!token_list || !error_list) goto fail;
+
   struct OpRec oprec;
-  struct ParsedInstr parsed_instr = {0};
+  struct ParsedInstr parsed_instr = {OP_NONE};
+  enum SyntaxKind *syntax_array = syntax_table[oprec.type];
 
   if (token_list->len == 0) goto fail;
 
@@ -511,10 +556,9 @@ static struct ParsedInstr parse(const struct TokenList *token_list, struct Error
     goto fail;
   }
 
-  enum SyntaxKind *syntax_array = syntax_table[oprec.type];
-
-  for (size_t i = 0; ; i++) {
+  for (int i = 0; ; i++) {
     struct Token *token = (i < token_list->len)? &token_list->tokens[i]: NULL;
+
     if (syntax_array[i] != SK_END && !token) {
       error_list_add(error_list, "Incomplete instruction, expected more operands", 0, token_list->tokens[token_list->len - 1].end);
       goto fail;
@@ -547,6 +591,7 @@ static struct ParsedInstr parse(const struct TokenList *token_list, struct Error
           goto fail;
         }
 
+        // In case RST operand is not a 3 bit number.
         if (oprec.type == OP_RST && token->value > 7) {
           error_list_add(error_list, "Expected a value within the range 0x00 - 0x07 (3-bit)", token->start, token->end);
           goto fail;
@@ -565,6 +610,7 @@ static struct ParsedInstr parse(const struct TokenList *token_list, struct Error
           parsed_instr.register1_c = register_c;
         }
         else {
+          // Handle invalid instr "MOV M, M"
           if (parsed_instr.register1_c == 6 && register_c == 6) {
             error_list_add(error_list, "Expected registers are B, C, D, E, H, L or A", token->start, token->end);
             goto fail;
@@ -581,13 +627,36 @@ static struct ParsedInstr parse(const struct TokenList *token_list, struct Error
         }
         return parsed_instr;
 
-      default:
-        break;
     }
   }
 
 fail:
-  return (struct ParsedInstr){0};
+  return (struct ParsedInstr){OP_NONE};
+}
+
+static uint8_t get_instr_size(enum OpcodeType op_t) {
+  switch (op_t) {
+    case OP_NONE:
+      return 0;
+
+    case OP_RST:
+    case OP_FIXED:
+    case OP_REG_ID:
+    case OP_REG_REG:
+    case OP_REG_ARITH:
+    case OP_REG_PAIR_SP:
+    case OP_REG_PAIR_BD:
+    case OP_REG_PAIR_PSW:
+      return 1;
+
+    case OP_IMM8:
+    case OP_REG_IMM8:
+      return 2;
+
+    case OP_ADDR16:
+    case OP_REG_PAIR_SP_IMM16:
+      return 3;
+  }
 }
 
 static uint32_t assemble_instr(struct ParsedInstr parsed_instr) {
@@ -601,65 +670,54 @@ static uint32_t assemble_instr(struct ParsedInstr parsed_instr) {
 
   uint16_t number = parsed_instr.number;
 
-  uint8_t size = 0;
-
   switch (op_t) {
     case OP_NONE:
       break;
 
     case OP_FIXED:
       asmbld_instr = opcode;
-      size = 1;
       break;
 
     case OP_REG_REG:
       asmbld_instr = opcode | (register1_c << 3) | register2_c;
-      size = 1;
       break;
 
     case OP_REG_ID:
       asmbld_instr = opcode | (register1_c << 3);
-      size = 1;
       break;
 
     case OP_REG_ARITH:
       asmbld_instr = opcode | register1_c;
-      size = 1;
       break;
 
     case OP_REG_PAIR_SP:
     case OP_REG_PAIR_BD:
     case OP_REG_PAIR_PSW:
       asmbld_instr = opcode | (register1_c << 4);
-      size = 1;
       break;
 
     case OP_REG_PAIR_SP_IMM16:
       asmbld_instr = number << 8 | (opcode + (register1_c << 4));
-      size = 3;
       break;
 
     case OP_REG_IMM8:
       asmbld_instr = number << 8 | (opcode + (register1_c << 3));
-      size = 2;
       break;
 
     case OP_IMM8:
       asmbld_instr = number << 8 | opcode;
-      size = 2;
       break;
 
     case OP_ADDR16:
       asmbld_instr = number << 8 | opcode;
-      size = 3;
       break;
 
     case OP_RST:
       asmbld_instr = opcode | (number << 3);
-      size = 1;
       break;
   }
 
+  uint8_t size = get_instr_size(op_t);
   return (size << 24) | asmbld_instr;
 }
 
@@ -697,14 +755,14 @@ cleanup:
 
 bool assemble_rom(char *read_from, char *write_to) {
   char *line = NULL;
-  size_t line_len = 0;
+  size_t line_cap = 0;
+  int line_len = 0;
 
   uint8_t *buffer = NULL;
-  size_t buffer_i = 0;
   size_t buffer_len = 0;
+  size_t buffer_cap = 0;
 
   int line_no = 1;
-  int line_i = 0;
 
   int errors = 0;
 
@@ -715,7 +773,7 @@ bool assemble_rom(char *read_from, char *write_to) {
     return false;
   }
 
-  while ((line_i = readline(fpr, &line, &line_len)) >= 0) {
+  while ((line_len = readline(fpr, &line, &line_cap)) >= 0) {
     uint32_t assembled_instr = assemble(line, line_no++);
     uint8_t size = (assembled_instr & 0xFF000000) >> 24;
 
@@ -725,8 +783,8 @@ bool assemble_rom(char *read_from, char *write_to) {
     }
 
     while (size) {
-      if (buffer_i >= buffer_len) {
-        size_t new_len = (buffer_len == 0)? 2048: buffer_len * 2;
+      if (buffer_len >= buffer_cap) {
+        size_t new_len = (buffer_cap == 0)? ROM_BUFF_BASE_SZ: buffer_cap * 2;
         uint8_t *tmp = realloc(buffer, sizeof(uint8_t) * new_len);
         if (!tmp) {
           printf("%serror%s: Rom buffer malloc failed\n", RED, RESET);
@@ -734,15 +792,15 @@ bool assemble_rom(char *read_from, char *write_to) {
           goto end;
         }
         buffer = tmp;
-        buffer_len = new_len;
+        buffer_cap = new_len;
       }
-      buffer[buffer_i++] = assembled_instr & 0xFF;
+      buffer[buffer_len++] = assembled_instr & 0xFF;
       assembled_instr = assembled_instr >> 8;
       size--;
     }
   }
 
-  if (line_i == -2) {
+  if (line_len == -2) {
     printf("%serror%s: Readline failed\n", RED, RESET);
     errors += 1;
     goto end;
@@ -757,7 +815,7 @@ bool assemble_rom(char *read_from, char *write_to) {
       printf("Opening file \'%s\' failed.\n", write_to);
       errors += 1;
     } else {
-      fwrite(buffer, sizeof(uint8_t), buffer_i, fpw);
+      fwrite(buffer, sizeof(uint8_t), buffer_len, fpw);
       fclose(fpw);
     }
   }

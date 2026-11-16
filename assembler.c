@@ -92,6 +92,10 @@ struct Operand {
   };
 };
 
+struct ParsedLabel {
+  char *text;
+};
+
 struct ParsedInstr {
   enum EncType enc_t;
   uint8_t opcode;
@@ -104,7 +108,7 @@ struct ParsedItem {
   enum ParsedItemType type;
   union {
     struct ParsedInstr instr;
-    char *label;
+    struct ParsedLabel label;
   };
 };
 
@@ -232,36 +236,43 @@ static struct ParsedItem *parsed_items = NULL;
 static size_t parsed_items_len = 0;
 static size_t parsed_items_cap = 0;
 
-static int add_label(const char *text, uint16_t addr) {
+static bool labels_add(char *text, uint16_t addr) {
+  if (!text) return false;
+
   if (labels_len == labels_cap) {
     size_t new_cap = labels_cap == 0 ? LABELS_ARR_BASE_SZ : labels_cap * 2;
 
-    struct Label *tmp = realloc(labels, new_cap * sizeof(*labels));
+    struct Label *tmp = realloc(labels, sizeof(struct Label) * new_cap);
     if (tmp == NULL)
-      return -1;
+      return false;
 
     labels = tmp;
     labels_cap = new_cap;
   }
 
-  char *copy = strdup(text);
-  if (copy == NULL)
-    return -1;
-
-  labels[labels_len].text = copy;
+  labels[labels_len].text = text;
   labels[labels_len].addr = addr;
   labels_len++;
 
-  return 0;
+  return true;
 }
 
-static int get_label(const char *text) {
+static bool labels_resolve(const char *text, uint16_t *resolved_val) {
+  if (!text || !resolved_val) return false;
   for (size_t i = 0; i < labels_len; i++) {
-    if (strcmp(labels[i].text, text) == 0)
-      return labels[i].addr;
+    if (strcmp(labels[i].text, text) == 0) {
+      *resolved_val = labels[i].addr;
+      return true;
+    }
   }
 
-  return -1;
+  return false;
+}
+
+static void labels_free(void) {
+  free(labels);
+  labels = NULL;
+  labels_cap = labels_len = 0;
 }
 
 static int register_code(const char *reg, enum EncType enc_t) {
@@ -588,7 +599,8 @@ static bool parse_label(void) {
 
   if (first_token && first_token->kind == TK_IDENT) {
     if (second_token && second_token->kind == TK_PUNCT && second_token->text[0] == ':') {
-      parsed_items_add((struct ParsedItem){.type = PARSED_LABEL, .label = first_token->text});
+      struct ParsedLabel label = {first_token->text};
+      parsed_items_add((struct ParsedItem){.type = PARSED_LABEL, .label = label});
       tokens_consume(2);
     }
   }
@@ -799,47 +811,129 @@ bool assemble_rom(char *read_from, char *write_to) {
   return true;
 }
 
+static void build_label_table(void) {
+  uint16_t address_counter = 0;
+  for (int i = 0; i < parsed_items_len; i++) {
+    switch (parsed_items[i].type) {
+      case PARSED_NONE:
+        break;
+      case PARSED_LABEL:
+        labels_add(parsed_items[i].label.text, address_counter);
+        break;
+      case PARSED_INSTR:
+        address_counter += get_instr_size(parsed_items[i].instr.enc_t);
+        break;
+    }
+  }
+}
+
+static void resolve_labels(void) {
+  for (int i = 0; i < parsed_items_len; i++) {
+    if (parsed_items[i].type == PARSED_INSTR) {
+      if (parsed_items[i].instr.number.type == OP_UNRESOLVED) {
+        uint16_t resolved_val = 0;
+        if (labels_resolve(parsed_items[i].instr.number.unresolved, &resolved_val)) {
+          parsed_items[i].instr.number.type = OP_VALUE;
+          parsed_items[i].instr.number.value = resolved_val;
+        } else {
+          errors_add((struct Error){"Undefined Symbol", 0, 0});
+        }
+      }
+    }
+  }
+}
+
+static void operand_print(const struct Operand *op) {
+  switch (op->type) {
+    case OP_VALUE:
+      printf("0x%04x (%u)", op->value, op->value);
+      break;
+
+    case OP_UNRESOLVED:
+      printf("UNRESOLVED(%s)", op->unresolved);
+      break;
+  }
+}
+
+static void parsed_items_print(void) {
+  for (int i = 0; i < parsed_items_len; i++) {
+    const struct ParsedItem *item = &parsed_items[i];
+
+    printf("[%04d] ", i);
+
+    switch (item->type) {
+      case PARSED_NONE:
+        printf("NONE\n");
+        break;
+
+      case PARSED_LABEL:
+        printf("LABEL: %s\n", item->label.text);
+        break;
+
+      case PARSED_INSTR: {
+        const struct ParsedInstr *instr = &item->instr;
+
+        printf("INSTR: opcode=0x%02x enc=%d\n", instr->opcode,
+               instr->enc_t);
+
+        printf("       reg1=");
+        operand_print(&instr->reg1);
+
+        printf(" reg2=");
+        operand_print(&instr->reg2);
+
+        printf(" number=");
+        operand_print(&instr->number);
+
+        printf("\n");
+        break;
+      }
+    }
+  }
+}
+
 int main(void) {
-  tokenize("", 2);
-  tokenize("      ;sdfds", 3);
-  tokenize("label1", 4);
-  tokenize("label_2:", 6);
-  tokenize("label_3:mov a, b", 7);
-  tokenize("jmp label_2", 8);
+  tokenize("start: nop", 0);
+  tokenize("      mov a, b", 1);
+  tokenize("      mvi a, 0xFF", 2);
+  tokenize("      adi 0o17", 3);
+  tokenize("      sui 0b1010", 4);
+  tokenize("      lxi h, 1234", 5);
+  tokenize("      jmp loop", 6);
+  tokenize("loop: inr a", 7);
+  tokenize("      jnz loop", 8);
+  tokenize("      call subroutine", 9);
+  tokenize("      hlt", 10);
+  tokenize("subroutine: push b", 11);
+  tokenize("      pop b", 12);
+  tokenize("      ret", 13);
+  tokenize("      jmp start", 14);
+  tokenize("      ; comment only", 15);
+  tokenize("next: dcr c", 16);
+  tokenize("      jnz next", 17);
+  tokenize("      lda 0x2000", 18);
+  tokenize("      sta 0o1000", 19);
+  tokenize("      lhld 0b100000000", 20);
+  tokenize("      shld 65535", 21);
+  tokenize("      rst 7", 22);
+  tokenize("      nop", 23);
 
   while (parse());
 
-  for (int i = 0; i < parsed_items_len; i++) {
-    char *s;
-    switch (parsed_items[i].type) {
-      case PARSED_NONE:
-        s = "NONE";
-        break;
-      case PARSED_LABEL:
-        s = "LABEL";
-        break;
-      case PARSED_INSTR:
-        s = "INSTR";
-        break;
-    }
-
-    printf("%s: ", s);
-    if (parsed_items[i].type == PARSED_LABEL) {
-      printf("%s\n", parsed_items[i].label);
-    } else if (parsed_items[i].type == PARSED_INSTR) {
-      printf("0x%x ", parsed_items[i].instr.opcode);
-      if (parsed_items[i].instr.number.type == OP_UNRESOLVED)
-        printf("%s\n", parsed_items[i].instr.number.unresolved);
-      else
-        printf("\n");
-    } else {
-      printf("\n");
-    }
+  if (!errors_len) {
+    build_label_table();
   }
+  
+  parsed_items_print();
+  printf("\n");
+  resolve_labels();
+  parsed_items_print();
 
   errors_print();
 
-  tokens_free();
+  parsed_items_free();
+  labels_free();
   errors_free();
+  tokens_free();
   return 0;
 }

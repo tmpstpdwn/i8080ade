@@ -9,6 +9,9 @@
 #include <stdio.h>
 
 #include "assembler.h"
+
+#include "vector.h"
+
 // #include "utils.h"
 
 #define LABELS_ARR_BASE_SZ 10
@@ -220,48 +223,24 @@ static struct OpcodeRec first_token[] = {
   {NULL}
 };
 
-static struct Label *labels = NULL;
-static size_t labels_len = 0;
-static size_t labels_cap = 0;
-
-static struct Token *tokens = NULL;
-static size_t tokens_len = 0;
-static size_t tokens_cap = 0;
-
-static struct Error *errors = NULL;
-static size_t errors_len = 0;
-static size_t errors_cap = 0;
-
-static struct ParsedItem *parsed_items = NULL;
-static size_t parsed_items_len = 0;
-static size_t parsed_items_cap = 0;
+struct Vector *labels, *tokens, *errors, *parsed_items;
 
 static bool labels_add(char *text, uint16_t addr) {
   if (!text) return false;
 
-  if (labels_len == labels_cap) {
-    size_t new_cap = labels_cap == 0 ? LABELS_ARR_BASE_SZ : labels_cap * 2;
-
-    struct Label *tmp = realloc(labels, sizeof(struct Label) * new_cap);
-    if (tmp == NULL)
-      return false;
-
-    labels = tmp;
-    labels_cap = new_cap;
-  }
-
-  labels[labels_len].text = text;
-  labels[labels_len].addr = addr;
-  labels_len++;
-
-  return true;
+  struct Label label = {text, addr};
+  return vector_append(labels, &label);
 }
 
 static bool labels_resolve(const char *text, uint16_t *resolved_val) {
   if (!text || !resolved_val) return false;
-  for (size_t i = 0; i < labels_len; i++) {
-    if (strcmp(labels[i].text, text) == 0) {
-      *resolved_val = labels[i].addr;
+
+  size_t label_table_len = vector_len(labels);
+
+  for (size_t i = 0; i < label_table_len; i++) {
+    struct Label *label = vector_get(labels, i);
+    if (strcmp(label->text, text) == 0) {
+      *resolved_val = label->addr;
       return true;
     }
   }
@@ -270,9 +249,7 @@ static bool labels_resolve(const char *text, uint16_t *resolved_val) {
 }
 
 static void labels_free(void) {
-  free(labels);
-  labels = NULL;
-  labels_cap = labels_len = 0;
+  vector_free(labels);
 }
 
 static int register_code(const char *reg, enum EncType enc_t) {
@@ -424,52 +401,28 @@ static char *substr(const char *str, size_t from, size_t to) {
 }
 
 static bool tokens_add(struct Token token) {
-  if (tokens_len >= tokens_cap) {
-    size_t new_cap = (tokens == NULL)? TOKENS_BASE_SZ: tokens_cap * 2;
-    struct Token *tmp = realloc(tokens, sizeof(struct Token) * new_cap);
-    if (!tmp) return false;
-    tokens = tmp;
-    tokens_cap = new_cap;
-  }
-
-  tokens[tokens_len++] = token;
-
-  return true;
+  return vector_append(tokens, &token);
 }
 
 static inline void tokens_free() {
+  size_t tokens_len = vector_len(tokens);
   for (size_t i = 0; i < tokens_len; i++) {
-    free(tokens[i].text);
+    struct Token *token = vector_get(tokens, i);
+    free(token->text);
   }
-  free(tokens);
-  tokens = NULL;
-  tokens_cap = tokens_len = 0;
+  vector_free(tokens);
 }
 
-static void errors_add(struct Error error) {
-  if (errors_len >= errors_cap) {
-    size_t new_cap = (tokens == NULL)? TOKENS_BASE_SZ: tokens_cap * 2;
-    struct Error *tmp = realloc(errors, sizeof(struct Error) * new_cap);
-    if (!tmp) return;
-    errors = tmp;
-    errors_cap += new_cap;
-  }
-
-  errors[errors_len++] = error;
+static bool errors_add(struct Error error) {
+  return vector_append(errors, &error);
 }
 
 static void errors_print(void) {
-  if (errors_len) {
-    for (int j = 0; j < errors_len; j++) {
-      printf("%s\n", errors[j].text);
-    }
-  }
+  // WIP
 }
 
 static void errors_free(void) {
-  free(errors);
-  errors = NULL;
-  errors_cap = errors_len = 0;
+  vector_free(errors);
 }
 
 static void tokenize(const char *line, size_t lineno) {
@@ -549,23 +502,11 @@ static bool get_oprec(const char *mnemonic, struct OpcodeRec *oprec) {
 }
 
 static bool parsed_items_add(struct ParsedItem parsed_item) {
-  if (parsed_items_len >= parsed_items_cap) {
-    size_t new_cap = (parsed_items == NULL)? PARSED_ITEMS_BASE_SZ: parsed_items_cap * 2;
-    struct ParsedItem *tmp = realloc(parsed_items, sizeof(struct ParsedItem) * new_cap);
-    if (!tmp) return false;
-    parsed_items = tmp;
-    parsed_items_cap = new_cap;
-  }
-
-  parsed_items[parsed_items_len++] = parsed_item;
-
-  return true;
+  return vector_append(parsed_items, &parsed_item);
 }
 
 static void parsed_items_free(void) {
-  free(parsed_items);
-  parsed_items = NULL;
-  parsed_items_cap = parsed_items_len = 0;
+  vector_free(parsed_items);
 }
 
 static struct Token* tokens_get(bool consume, size_t n) {
@@ -575,8 +516,9 @@ static struct Token* tokens_get(bool consume, size_t n) {
   struct Token *ret_token = NULL;
 
   size_t step = n - 1;
+  size_t tokens_len = vector_len(tokens);
   if (get_token_i + step < tokens_len) {
-    ret_token = &tokens[get_token_i + step];
+    ret_token = vector_get(tokens, get_token_i + step);
     if (consume) {
       get_token_i += n;      
     }
@@ -813,28 +755,33 @@ bool assemble_rom(char *read_from, char *write_to) {
 
 static void build_label_table(void) {
   uint16_t address_counter = 0;
+
+  size_t parsed_items_len = vector_len(parsed_items);
   for (int i = 0; i < parsed_items_len; i++) {
-    switch (parsed_items[i].type) {
+    struct ParsedItem *parsed_item = vector_get(parsed_items, i);
+    switch (parsed_item->type) {
       case PARSED_NONE:
         break;
       case PARSED_LABEL:
-        labels_add(parsed_items[i].label.text, address_counter);
+        labels_add(parsed_item->label.text, address_counter);
         break;
       case PARSED_INSTR:
-        address_counter += get_instr_size(parsed_items[i].instr.enc_t);
+        address_counter += get_instr_size(parsed_item->instr.enc_t);
         break;
     }
   }
 }
 
 static void resolve_labels(void) {
+  size_t parsed_items_len = vector_len(parsed_items);
   for (int i = 0; i < parsed_items_len; i++) {
-    if (parsed_items[i].type == PARSED_INSTR) {
-      if (parsed_items[i].instr.number.type == OP_UNRESOLVED) {
+    struct ParsedItem *parsed_item = vector_get(parsed_items, i);
+    if (parsed_item->type == PARSED_INSTR) {
+      if (parsed_item->instr.number.type == OP_UNRESOLVED) {
         uint16_t resolved_val = 0;
-        if (labels_resolve(parsed_items[i].instr.number.unresolved, &resolved_val)) {
-          parsed_items[i].instr.number.type = OP_VALUE;
-          parsed_items[i].instr.number.value = resolved_val;
+        if (labels_resolve(parsed_item->instr.number.unresolved, &resolved_val)) {
+          parsed_item->instr.number.type = OP_VALUE;
+          parsed_item->instr.number.value = resolved_val;
         } else {
           errors_add((struct Error){"Undefined Symbol", 0, 0});
         }
@@ -856,22 +803,23 @@ static void operand_print(const struct Operand *op) {
 }
 
 static void parsed_items_print(void) {
+  size_t parsed_items_len = vector_len(parsed_items);
   for (int i = 0; i < parsed_items_len; i++) {
-    const struct ParsedItem *item = &parsed_items[i];
+    const struct ParsedItem *parsed_item = vector_get(parsed_items, i);
 
     printf("[%04d] ", i);
 
-    switch (item->type) {
+    switch (parsed_item->type) {
       case PARSED_NONE:
         printf("NONE\n");
         break;
 
       case PARSED_LABEL:
-        printf("LABEL: %s\n", item->label.text);
+        printf("LABEL: %s\n", parsed_item->label.text);
         break;
 
       case PARSED_INSTR: {
-        const struct ParsedInstr *instr = &item->instr;
+        const struct ParsedInstr *instr = &parsed_item->instr;
 
         printf("INSTR: opcode=0x%02x enc=%d\n", instr->opcode,
                instr->enc_t);
@@ -893,7 +841,13 @@ static void parsed_items_print(void) {
 }
 
 int main(void) {
-  tokenize("start: nop", 0);
+  labels = vector_new(sizeof(struct Label));
+  tokens = vector_new(sizeof(struct Token));
+  errors = vector_new(sizeof(struct Error));
+  parsed_items = vector_new(sizeof(struct ParsedItem));
+
+  tokenize("start:", 0);
+  tokenize("nop", 0);
   tokenize("      mov a, b", 1);
   tokenize("      mvi a, 0xFF", 2);
   tokenize("      adi 0o17", 3);
@@ -920,16 +874,15 @@ int main(void) {
 
   while (parse());
 
-  if (!errors_len) {
+  if (!vector_len(errors)) {
     build_label_table();
+    parsed_items_print();
+    printf("\n");
+    resolve_labels();
+    parsed_items_print();
+  } else {
+    errors_print();
   }
-  
-  parsed_items_print();
-  printf("\n");
-  resolve_labels();
-  parsed_items_print();
-
-  errors_print();
 
   parsed_items_free();
   labels_free();

@@ -8,16 +8,9 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-#include "assembler.h"
+// #include "assembler.h"
 
 #include "vector.h"
-
-// #include "utils.h"
-
-#define LABELS_ARR_BASE_SZ 10
-#define ROM_BUFF_BASE_SZ 2048
-#define PARSED_ITEMS_BASE_SZ 32
-#define TOKENS_BASE_SZ 10
 
 #define RED   "\033[31m"
 #define RESET "\033[0m"
@@ -74,7 +67,22 @@ enum EncType {
   ENC_RST
 };
 
-struct Error {
+struct SourceFile {
+  size_t id;
+  char *text;
+  const char *name;
+  struct Vector *line_offsets;
+  struct Vector *labels;
+  struct Vector* tokens;
+  struct Vector* diagnostics;
+  struct Vector* parsed_items;
+};
+
+struct SourceManager {
+  struct Vector *source_files;
+};
+
+struct Diagnostic {
   char *text;
   size_t start, end;
 };
@@ -84,7 +92,6 @@ struct Token {
   char *text;
   uint64_t value;
   size_t start, end;
-  size_t line;
 };
 
 struct Operand {
@@ -102,8 +109,8 @@ struct ParsedLabel {
 struct ParsedInstr {
   enum EncType enc_t;
   uint8_t opcode;
-  struct Operand reg1;
-  struct Operand reg2;
+  uint8_t reg1;
+  uint8_t reg2;
   struct Operand number;
 };
 
@@ -223,22 +230,18 @@ static struct OpcodeRec first_token[] = {
   {NULL}
 };
 
-struct Vector *labels, *tokens, *errors, *parsed_items;
-
-static bool labels_add(char *text, uint16_t addr) {
-  if (!text) return false;
-
-  struct Label label = {text, addr};
-  return vector_append(labels, &label);
+static bool labels_add(struct SourceFile *source_file, struct Label label) {
+  if (!source_file) return false;
+  return vector_append(source_file->labels, &label);
 }
 
-static bool labels_resolve(const char *text, uint16_t *resolved_val) {
+static bool labels_resolve(struct SourceFile *source_file, const char *text, uint16_t *resolved_val) {
   if (!text || !resolved_val) return false;
 
-  size_t label_table_len = vector_len(labels);
+  size_t label_table_len = vector_len(source_file->labels);
 
   for (size_t i = 0; i < label_table_len; i++) {
-    struct Label *label = vector_get(labels, i);
+    struct Label *label = vector_get(source_file->labels, i);
     if (strcmp(label->text, text) == 0) {
       *resolved_val = label->addr;
       return true;
@@ -246,10 +249,6 @@ static bool labels_resolve(const char *text, uint16_t *resolved_val) {
   }
 
   return false;
-}
-
-static void labels_free(void) {
-  vector_free(labels);
 }
 
 static int register_code(const char *reg, enum EncType enc_t) {
@@ -370,6 +369,7 @@ static enum TokenKind get_tokenkind(enum TokenKind last_token_kind, char curr_to
   }
 
   if (curr_token == ',' || curr_token == ':') return TK_PUNCT;
+  else if (curr_token == '\n') return TK_NEWLINE;
   else if (isspace(curr_token)) return TK_NONE;
 
   return TK_INVALID;
@@ -400,81 +400,68 @@ static char *substr(const char *str, size_t from, size_t to) {
   return substr;
 }
 
-static bool tokens_add(struct Token token) {
-  return vector_append(tokens, &token);
-}
-
-static inline void tokens_free() {
-  size_t tokens_len = vector_len(tokens);
-  for (size_t i = 0; i < tokens_len; i++) {
-    struct Token *token = vector_get(tokens, i);
-    free(token->text);
-  }
-  vector_free(tokens);
-}
-
-static bool errors_add(struct Error error) {
-  return vector_append(errors, &error);
-}
-
-static void errors_print(void) {
+static void diagnostics_print(void) {
   // WIP
 }
 
-static void errors_free(void) {
-  vector_free(errors);
+static bool diagnostics_add(struct SourceFile *source_file, struct Diagnostic diagnostic) {
+  if (!source_file) return false;
+  return vector_append(source_file->diagnostics, &diagnostic);
 }
 
-static void tokenize(const char *line, size_t lineno) {
-  if (!line) return;
+static bool tokens_add(struct SourceFile *source_file, struct Token token) {
+  if (!source_file) return false;
+  return vector_append(source_file->tokens, &token);
+}
+
+static bool lexer_tokenize(struct SourceFile *source_file) {
+  if (!source_file) return false;
 
   size_t from = 0;
   enum TokenKind last_token_kind = TK_NONE;
   enum TokenKind curr_token_kind = TK_NONE;
   bool alive = true;
 
-  bool line_tokenized = false;
+  char *file_text = source_file->text;
 
   for (int i = 0 ; alive ; i++) {
-    if (line[i] == '\0') {
+    if (file_text[i] == '\0') {
       curr_token_kind = TK_NONE;
       alive = false;
     } else {
-      curr_token_kind = get_tokenkind(last_token_kind, line[i]);
+      curr_token_kind = get_tokenkind(last_token_kind, file_text[i]);
     }
     
-    if (curr_token_kind != last_token_kind || is_single_token(line[i])) {
+    if (curr_token_kind != last_token_kind || is_single_token(file_text[i])) {
       if (last_token_kind != TK_NONE) {
-        char *token_str = substr(line, from, i);
-        if (!token_str) return;
+        char *token_str = substr(file_text, from, i);
+        if (!token_str) return false;
         uint64_t value = 0;
 
         if (last_token_kind == TK_NUM) {
           switch (str_to_num(token_str, &value)) {
             case NUM_INVALID:
-              errors_add((struct Error){"Invalid numeric literal", from, i});
+              diagnostics_add(source_file, (struct Diagnostic){"Invalid numeric literal", from, i});
               break;
             case NUM_OVERFLOW:
-              errors_add((struct Error){"Number literal out of range", from, i});
+              diagnostics_add(source_file, (struct Diagnostic){"Number literal out of range", from, i});
               break;
             case NUM_OK:
               break;
           }
         } else if (last_token_kind == TK_INVALID) {
-          errors_add((struct Error){"Unrecognised token", from, i});
+          diagnostics_add(source_file, (struct Diagnostic){"Unrecognised token", from, i});
         }
 
-        if (!tokens_add((struct Token){last_token_kind, token_str, value, from, i, lineno})) return;
-        line_tokenized = true;
+        if (!tokens_add(source_file, (struct Token){last_token_kind, token_str, value, from, i})) return false;
       }
       from = i;
-      if (line[i] == ';') break; // handle comments.
     }
 
     last_token_kind = curr_token_kind;
   }
 
-  if (line_tokenized) tokens_add((struct Token){.kind = TK_NEWLINE});
+  return true;
 }
 
 static bool get_oprec(const char *mnemonic, struct OpcodeRec *oprec) {
@@ -501,24 +488,21 @@ static bool get_oprec(const char *mnemonic, struct OpcodeRec *oprec) {
   return false;
 }
 
-static bool parsed_items_add(struct ParsedItem parsed_item) {
-  return vector_append(parsed_items, &parsed_item);
+static bool parsed_items_add(struct SourceFile *source_file, struct ParsedItem parsed_item) {
+  if (!source_file) return false;
+  return vector_append(source_file->parsed_items, &parsed_item);
 }
 
-static void parsed_items_free(void) {
-  vector_free(parsed_items);
-}
-
-static struct Token* tokens_get(bool consume, size_t n) {
-  if (n == 0) return NULL;
+static struct Token* tokens_get(struct SourceFile *source_file, bool consume, size_t n) {
+  if (!source_file || n == 0) return NULL;
 
   static size_t get_token_i = 0;
   struct Token *ret_token = NULL;
 
   size_t step = n - 1;
-  size_t tokens_len = vector_len(tokens);
+  size_t tokens_len = vector_len(source_file->tokens);
   if (get_token_i + step < tokens_len) {
-    ret_token = vector_get(tokens, get_token_i + step);
+    ret_token = vector_get(source_file->tokens, get_token_i + step);
     if (consume) {
       get_token_i += n;      
     }
@@ -527,55 +511,59 @@ static struct Token* tokens_get(bool consume, size_t n) {
   return ret_token;
 }
 
-static inline struct Token *tokens_consume(size_t n) {
-  return tokens_get(true, n);
+static inline struct Token *tokens_consume(struct SourceFile *source_file, size_t n) {
+  return tokens_get(source_file, true, n);
 }
 
-static inline struct Token *tokens_peek(size_t n) {
-  return tokens_get(false, n);
+static inline struct Token *tokens_peek(struct SourceFile *source_file, size_t n) {
+  return tokens_get(source_file, false, n);
 }
 
-static bool parse_label(void) {
-  struct Token *first_token = tokens_peek(1);
-  struct Token *second_token = tokens_peek(2);
+static bool parse_label(struct SourceFile *source_file) {
+  if (!source_file) return false;
+
+  struct Token *first_token = tokens_peek(source_file, 1);
+  struct Token *second_token = tokens_peek(source_file, 2);
 
   if (first_token && first_token->kind == TK_IDENT) {
     if (second_token && second_token->kind == TK_PUNCT && second_token->text[0] == ':') {
       struct ParsedLabel label = {first_token->text};
-      parsed_items_add((struct ParsedItem){.type = PARSED_LABEL, .label = label});
-      tokens_consume(2);
+      parsed_items_add(source_file, (struct ParsedItem){.type = PARSED_LABEL, .label = label});
+      tokens_consume(source_file, 2);
     }
   }
 
-  if (tokens_peek(1) && tokens_peek(1)->kind == TK_NEWLINE) {
-    tokens_consume(1);    
+  if (tokens_peek(source_file, 1) && tokens_peek(source_file, 1)->kind == TK_NEWLINE) {
+    tokens_consume(source_file, 1);    
     return false;
   }
 
   return true;
 }
 
-static void parse_instr(void) {
+static void parse_instr(struct SourceFile *source_file) {
+  if (!source_file) return;
+
   struct OpcodeRec oprec;
   enum SyntaxKind *syntax_array = NULL;
   size_t syntax_arr_i = 0;
   struct ParsedInstr parsed_instr = {ENC_NONE};
 
   while (true) {
-    struct Token *token = tokens_consume(1);
+    struct Token *token = tokens_consume(source_file, 1);
     if (!token) return;
 
     if (syntax_array == NULL) {
       if (token->kind == TK_IDENT && get_oprec(token->text, &oprec)) {
           syntax_array = syntax_table[oprec.enc_t];
         } else {
-          errors_add((struct Error){"Expected a valid opcode mnemonic", token->start, token->end});
+          diagnostics_add(source_file, (struct Diagnostic){"Expected a valid opcode mnemonic", token->start, token->end});
           goto fail;
         }
     }
 
     if (token->kind == TK_NEWLINE && syntax_array[syntax_arr_i] != SK_END) {
-      errors_add((struct Error){"Incomplete instruction, expected more operands", 0, 0});
+      diagnostics_add(source_file, (struct Diagnostic){"Incomplete instruction, expected more operands", 0, 0});
       goto fail;
     }
 
@@ -587,14 +575,14 @@ static void parse_instr(void) {
 
       case SK_COMMA:
         if (token->kind != TK_PUNCT) {
-          errors_add((struct Error){"Expected \',\' between operands", token->start, token->end});
+          diagnostics_add(source_file, (struct Diagnostic){"Expected \',\' between operands", token->start, token->end});
           goto fail;
         }
         break;
 
       case SK_D8:
         if (token->kind != TK_NUM || token->value > 0xFF) {
-          errors_add((struct Error){"Expected a value within the range 0x00 - 0xFF (8-bit)", token->start, token->end});
+          diagnostics_add(source_file, (struct Diagnostic){"Expected a value within the range 0x00 - 0xFF (8-bit)", token->start, token->end});
           goto fail;
         }
 
@@ -606,7 +594,7 @@ static void parse_instr(void) {
       case SK_A16:
         if (token->kind == TK_NUM) {
           if (token->value > 0xFFFF) {
-            errors_add((struct Error){"Expected a value within the range 0x0000 - 0xFFFF (16-bit)", token->start, token->end});
+            diagnostics_add(source_file, (struct Diagnostic){"Expected a value within the range 0x0000 - 0xFFFF (16-bit)", token->start, token->end});
             goto fail;
           }
           parsed_instr.number.type = OP_VALUE;
@@ -615,7 +603,7 @@ static void parse_instr(void) {
           parsed_instr.number.type = OP_UNRESOLVED;
           parsed_instr.number.unresolved = token->text;
         } else {
-          errors_add((struct Error){"Expected a value within the range 0x0000 - 0xFFFF (16-bit)", token->start, token->end});
+          diagnostics_add(source_file, (struct Diagnostic){"Expected a value within the range 0x0000 - 0xFFFF (16-bit)", token->start, token->end});
           goto fail;
         }
         break;
@@ -623,26 +611,24 @@ static void parse_instr(void) {
       case SK_REG: {
         int register_c = register_code(token->text, oprec.enc_t);
         if (register_c == -1) {
-          errors_add((struct Error){"Expected a register", token->start, token->end});
+          diagnostics_add(source_file, (struct Diagnostic){"Expected a register", token->start, token->end});
           goto fail;
         }
         if (syntax_arr_i == 1) {
-          parsed_instr.reg1.type = OP_VALUE;
-          parsed_instr.reg1.value = register_c;
+          parsed_instr.reg1 = register_c;
         }
         else {
-          parsed_instr.reg2.type = OP_VALUE;
-          parsed_instr.reg2.value = register_c;
+          parsed_instr.reg2 = register_c;
         }
         break;
       }
 
       case SK_END:
         if (token->kind != TK_NEWLINE) {
-          errors_add((struct Error){"Unexpected trailing tokens", 0, 0});
+          diagnostics_add(source_file, (struct Diagnostic){"Unexpected trailing tokens", 0, 0});
           goto fail;
         }
-        parsed_items_add((struct ParsedItem){.type = PARSED_INSTR, .instr = parsed_instr});
+        parsed_items_add(source_file, (struct ParsedItem){.type = PARSED_INSTR, .instr = parsed_instr});
         return;
     }
 
@@ -652,14 +638,16 @@ static void parse_instr(void) {
   return; // Should never be reached.
 
 fail:
-  while (tokens_peek(1) && tokens_peek(1)->kind != TK_NEWLINE)
-    tokens_consume(1); // Consume everything till newline.
-  tokens_consume(1); // Consume newline.
+  while (tokens_peek(source_file, 1) && tokens_peek(source_file, 1)->kind != TK_NEWLINE)
+    tokens_consume(source_file, 1); // Consume everything till newline.
+  tokens_consume(source_file, 1); // Consume newline.
 }
 
-static bool parse(void) {
-  if (parse_label()) parse_instr();
-  return tokens_peek(1) != NULL;
+static void parser_parse(struct SourceFile *source_file) {
+  while (tokens_peek(source_file, 1)) {
+    if (!parse_label(source_file)) continue;
+    parse_instr(source_file);
+  } 
 }
 
 static uint8_t get_instr_size(enum EncType enc_t) {
@@ -693,8 +681,8 @@ static uint32_t assemble_instr(struct ParsedInstr parsed_instr) {
   enum EncType enc_t = parsed_instr.enc_t;
   uint8_t opcode = parsed_instr.opcode;
 
-  uint8_t register1_c = parsed_instr.reg1.value;
-  uint8_t register2_c = parsed_instr.reg2.value;
+  uint8_t register1_c = parsed_instr.reg1;
+  uint8_t register2_c = parsed_instr.reg2;
 
   uint16_t number = parsed_instr.number.value;
 
@@ -749,144 +737,158 @@ static uint32_t assemble_instr(struct ParsedInstr parsed_instr) {
   return (size << 24) | asmbld_instr;
 }
 
-bool assemble_rom(char *read_from, char *write_to) {
-  return true;
-}
-
-static void build_label_table(void) {
+static void build_label_table(struct SourceFile *source_file) {
   uint16_t address_counter = 0;
 
-  size_t parsed_items_len = vector_len(parsed_items);
+  size_t parsed_items_len = vector_len(source_file->parsed_items);
   for (int i = 0; i < parsed_items_len; i++) {
-    struct ParsedItem *parsed_item = vector_get(parsed_items, i);
-    switch (parsed_item->type) {
+    struct ParsedItem *p = vector_get(source_file->parsed_items, i);
+    switch (p->type) {
       case PARSED_NONE:
         break;
       case PARSED_LABEL:
-        labels_add(parsed_item->label.text, address_counter);
+        labels_add(source_file, (struct Label){p->label.text, address_counter});
         break;
       case PARSED_INSTR:
-        address_counter += get_instr_size(parsed_item->instr.enc_t);
+        address_counter += get_instr_size(p->instr.enc_t);
         break;
     }
   }
 }
 
-static void resolve_labels(void) {
-  size_t parsed_items_len = vector_len(parsed_items);
+static void resolve_labels(struct SourceFile *source_file) {
+  size_t parsed_items_len = vector_len(source_file->parsed_items);
   for (int i = 0; i < parsed_items_len; i++) {
-    struct ParsedItem *parsed_item = vector_get(parsed_items, i);
-    if (parsed_item->type == PARSED_INSTR) {
-      if (parsed_item->instr.number.type == OP_UNRESOLVED) {
+    struct ParsedItem *p = vector_get(source_file->parsed_items, i);
+    if (p->type == PARSED_INSTR) {
+      if (p->instr.number.type == OP_UNRESOLVED) {
         uint16_t resolved_val = 0;
-        if (labels_resolve(parsed_item->instr.number.unresolved, &resolved_val)) {
-          parsed_item->instr.number.type = OP_VALUE;
-          parsed_item->instr.number.value = resolved_val;
+        if (labels_resolve(source_file, p->instr.number.unresolved, &resolved_val)) {
+          p->instr.number.type = OP_VALUE;
+          p->instr.number.value = resolved_val;
         } else {
-          errors_add((struct Error){"Undefined Symbol", 0, 0});
+          diagnostics_add(source_file, (struct Diagnostic){"Undefined Symbol", 0, 0});
         }
       }
     }
   }
 }
 
-static void operand_print(const struct Operand *op) {
-  switch (op->type) {
-    case OP_VALUE:
-      printf("0x%04x (%u)", op->value, op->value);
-      break;
-
-    case OP_UNRESOLVED:
-      printf("UNRESOLVED(%s)", op->unresolved);
-      break;
-  }
+struct SourceManager source_manager_new(void) {
+  struct SourceManager source_manager;
+  source_manager.source_files = vector_new(sizeof(struct SourceFile));
+  return source_manager;
 }
 
-static void parsed_items_print(void) {
-  size_t parsed_items_len = vector_len(parsed_items);
-  for (int i = 0; i < parsed_items_len; i++) {
-    const struct ParsedItem *parsed_item = vector_get(parsed_items, i);
+static void source_manager_free(struct SourceManager source_manager) {
+  size_t source_files_count = vector_len(source_manager.source_files);
+  for (size_t i = 0; i < source_files_count; i++) {
+    struct SourceFile *source_file = vector_get(source_manager.source_files, i); 
+    vector_free(source_file->line_offsets);
+    vector_free(source_file->diagnostics);
+    vector_free(source_file->labels);
+    vector_free(source_file->tokens);
+    vector_free(source_file->parsed_items);
+    free(source_file->text);
+  }
+  vector_free(source_manager.source_files);
+}
 
-    printf("[%04d] ", i);
+static int source_manager_add_file(struct SourceManager *source_manager, char *text, const char *file_name) {
+  if (!source_manager || !text || !file_name) return -1;
 
-    switch (parsed_item->type) {
-      case PARSED_NONE:
-        printf("NONE\n");
-        break;
+  struct Vector *line_offsets = vector_new(sizeof(size_t));
+  struct Vector *labels = vector_new(sizeof(struct Label));
+  struct Vector *errors = vector_new(sizeof(struct Diagnostic));
+  struct Vector *tokens = vector_new(sizeof(struct Token));
+  struct Vector *parsed_items = vector_new(sizeof(struct ParsedItem));
 
-      case PARSED_LABEL:
-        printf("LABEL: %s\n", parsed_item->label.text);
-        break;
+  if (!line_offsets || !errors || !tokens || !parsed_items) goto fail;
 
-      case PARSED_INSTR: {
-        const struct ParsedInstr *instr = &parsed_item->instr;
-
-        printf("INSTR: opcode=0x%02x enc=%d\n", instr->opcode,
-               instr->enc_t);
-
-        printf("       reg1=");
-        operand_print(&instr->reg1);
-
-        printf(" reg2=");
-        operand_print(&instr->reg2);
-
-        printf(" number=");
-        operand_print(&instr->number);
-
-        printf("\n");
-        break;
-      }
+  for (size_t i = 0, l = 0; text[i]; i++) {
+    if (text[i] == '\n') {
+      if (!vector_append(line_offsets, &l)) goto fail;
+      l = i + 1;
     }
   }
+
+  size_t file_id = vector_len(source_manager->source_files);
+
+  struct SourceFile source_file = {
+    .id = file_id,
+    .text = text,
+    .name = file_name,
+    .line_offsets = line_offsets,
+    .labels = labels,
+    .diagnostics = errors,
+    .tokens = tokens,
+    .parsed_items = parsed_items
+   };
+
+  if (!vector_append(source_manager->source_files, &source_file)) goto fail;
+
+  return file_id;
+
+fail:
+  vector_free(line_offsets);
+  vector_free(labels);
+  vector_free(errors);
+  vector_free(tokens);
+  vector_free(parsed_items);
+  return -1;
 }
 
-int main(void) {
-  labels = vector_new(sizeof(struct Label));
-  tokens = vector_new(sizeof(struct Token));
-  errors = vector_new(sizeof(struct Error));
-  parsed_items = vector_new(sizeof(struct ParsedItem));
+static size_t get_file_size(FILE *fp) {
+  size_t file_size = 0;
+  if (fp) {
+    fseek(fp, 0, SEEK_END);
+    file_size = ftell(fp);
+    rewind(fp);
+  }
+  return file_size;
+}
 
-  tokenize("start:", 0);
-  tokenize("nop", 0);
-  tokenize("      mov a, b", 1);
-  tokenize("      mvi a, 0xFF", 2);
-  tokenize("      adi 0o17", 3);
-  tokenize("      sui 0b1010", 4);
-  tokenize("      lxi h, 1234", 5);
-  tokenize("      jmp loop", 6);
-  tokenize("loop: inr a", 7);
-  tokenize("      jnz loop", 8);
-  tokenize("      call subroutine", 9);
-  tokenize("      hlt", 10);
-  tokenize("subroutine: push b", 11);
-  tokenize("      pop b", 12);
-  tokenize("      ret", 13);
-  tokenize("      jmp start", 14);
-  tokenize("      ; comment only", 15);
-  tokenize("next: dcr c", 16);
-  tokenize("      jnz next", 17);
-  tokenize("      lda 0x2000", 18);
-  tokenize("      sta 0o1000", 19);
-  tokenize("      lhld 0b100000000", 20);
-  tokenize("      shld 65535", 21);
-  tokenize("      rst 7", 22);
-  tokenize("      nop", 23);
+static char *get_file_text(const char *read_from) {
+  FILE *fp = fopen(read_from, "rb");
+  char *text = NULL;
 
-  while (parse());
+  if (!fp) return NULL;
 
-  if (!vector_len(errors)) {
-    build_label_table();
-    parsed_items_print();
-    printf("\n");
-    resolve_labels();
-    parsed_items_print();
-  } else {
-    errors_print();
+  size_t file_size = get_file_size(fp);
+  if (!file_size) goto end;
+
+  text = malloc((size_t)file_size + 1);
+
+  if (!text) goto end;
+
+  size_t bytes_read = fread(text, 1, (size_t)file_size, fp);
+  text[bytes_read] = '\0';
+
+end:
+  fclose(fp);
+  return text;
+}
+
+int main(int argc, char **argv) {
+  if (argc != 2) {
+    printf("expected a file\n");
+    return 1;
+  }
+  const char *file_name = argv[1];
+
+  char *file_text = get_file_text(file_name);
+  if (!file_text) {
+    printf("Reading \'%s\' into a buffer failed", file_name);
+    return 1;
   }
 
-  parsed_items_free();
-  labels_free();
-  errors_free();
-  tokens_free();
+  struct SourceManager source_manager = source_manager_new();
+  int file_id = source_manager_add_file(&source_manager, file_text, file_name);
+  struct SourceFile *source_file = vector_get(source_manager.source_files, file_id);
+
+  lexer_tokenize(source_file);
+  parser_parse(source_file);
+
+  source_manager_free(source_manager);
   return 0;
 }

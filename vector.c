@@ -53,6 +53,5 @@ void vector_free(struct Vector *v) {
   if (!v) return;
 
   free(v->data);
-  v->data = NULL;
-  v->cap = v->len = 0;
+  free(v);
 }

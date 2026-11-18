@@ -67,8 +67,12 @@ enum EncType {
   ENC_RST
 };
 
+struct LineOffset {
+  size_t offset;
+  size_t len;
+};
+
 struct SourceFile {
-  size_t id;
   char *text;
   const char *name;
   struct Vector *line_offsets;
@@ -78,20 +82,22 @@ struct SourceFile {
   struct Vector* parsed_items;
 };
 
-struct SourceManager {
-  struct Vector *source_files;
+struct SourceRange {
+  size_t lineno;
+  size_t start_offset;
+  size_t end_offset;
 };
 
 struct Diagnostic {
   char *text;
-  size_t start, end;
+  struct SourceRange range;
 };
 
 struct Token {
   enum TokenKind kind;
   char *text;
   uint64_t value;
-  size_t start, end;
+  struct SourceRange range;
 };
 
 struct Operand {
@@ -355,7 +361,7 @@ static enum NumParseRes str_to_num(const char *str, uint64_t *num) {
   return NUM_OK;
 }
 
-static enum TokenKind get_tokenkind(enum TokenKind last_token_kind, char curr_token) {
+static enum TokenKind lexer_get_tk(enum TokenKind last_token_kind, char curr_token) {
   if (isalpha(curr_token) || curr_token == '_') {
     if (last_token_kind == TK_NUM)
       return TK_NUM;
@@ -368,15 +374,15 @@ static enum TokenKind get_tokenkind(enum TokenKind last_token_kind, char curr_to
     return TK_NUM;
   }
 
-  if (curr_token == ',' || curr_token == ':') return TK_PUNCT;
+  if (curr_token == ',' || curr_token == ':' || curr_token == ';') return TK_PUNCT;
   else if (curr_token == '\n') return TK_NEWLINE;
-  else if (isspace(curr_token)) return TK_NONE;
+  else if (isspace(curr_token) || curr_token == '\0') return TK_NONE;
 
   return TK_INVALID;
 }
 
 static inline bool is_single_token(char c) {
-  enum TokenKind tokenkind = get_tokenkind(TK_NONE, c);
+  enum TokenKind tokenkind = lexer_get_tk(TK_NONE, c);
   return tokenkind == TK_PUNCT || tokenkind == TK_INVALID;
 }
 
@@ -400,8 +406,52 @@ static char *substr(const char *str, size_t from, size_t to) {
   return substr;
 }
 
-static void diagnostics_print(void) {
-  // WIP
+static void diagnostics_print(struct SourceFile *source_file) {
+  if (!source_file) return;
+
+  for (size_t i = 0; i < vector_len(source_file->diagnostics); i++) {
+    struct Diagnostic *diag = vector_get(source_file->diagnostics, i);
+
+    size_t line = diag->range.lineno;
+
+    struct LineOffset *line_offset = vector_get(source_file->line_offsets, line);
+
+    size_t start = diag->range.start_offset;
+    size_t end = diag->range.end_offset;
+
+    size_t offset = line_offset->offset;
+    size_t len = line_offset->len;
+
+    if (start < offset || start > offset + len)
+      continue;
+
+    size_t column = start - offset;
+
+    if (end > offset + len)
+      end = offset + len;
+
+    size_t highlight_len = end > start ? end - start : 1;
+
+    fprintf(stderr, "%s:%zu:%zu: %serror:%s %s\n",
+            source_file->name, line, column + 1,
+            RED, RESET, diag->text);
+
+    fprintf(stderr, " %4zu | %.*s%s%.*s%s%.*s\n",
+            line,
+            (int)column, source_file->text + offset,
+            RED,
+            (int)highlight_len, source_file->text + start,
+            RESET,
+            (int)(len - column - highlight_len),
+            source_file->text + start + highlight_len);
+
+    fprintf(stderr, "      | %*s%s^", (int)column, "", RED);
+
+    for (size_t j = 1; j < highlight_len; j++)
+      fputc('~', stderr);
+
+    fprintf(stderr, "%s\n", RESET);
+  }
 }
 
 static bool diagnostics_add(struct SourceFile *source_file, struct Diagnostic diagnostic) {
@@ -417,48 +467,73 @@ static bool tokens_add(struct SourceFile *source_file, struct Token token) {
 static bool lexer_tokenize(struct SourceFile *source_file) {
   if (!source_file) return false;
 
-  size_t from = 0;
-  enum TokenKind last_token_kind = TK_NONE;
-  enum TokenKind curr_token_kind = TK_NONE;
-  bool alive = true;
-
   char *file_text = source_file->text;
 
-  for (int i = 0 ; alive ; i++) {
-    if (file_text[i] == '\0') {
-      curr_token_kind = TK_NONE;
-      alive = false;
-    } else {
-      curr_token_kind = get_tokenkind(last_token_kind, file_text[i]);
-    }
+  enum TokenKind last_tk = TK_NONE;
+  enum TokenKind curr_tk = TK_NONE;
+
+  size_t i = 0;
+  size_t from = 0;
+  size_t lineno = 0;
+
+  while (true) {
+    char c = file_text[i];
+    curr_tk = lexer_get_tk(last_tk, c);
     
-    if (curr_token_kind != last_token_kind || is_single_token(file_text[i])) {
-      if (last_token_kind != TK_NONE) {
+    // Process tokens.
+    if (curr_tk != last_tk || is_single_token(c)) {
+      if (last_tk != TK_NONE) {
         char *token_str = substr(file_text, from, i);
         if (!token_str) return false;
         uint64_t value = 0;
+        struct SourceRange range = {lineno, from, i};
 
-        if (last_token_kind == TK_NUM) {
+        if (last_tk == TK_NUM) {
           switch (str_to_num(token_str, &value)) {
             case NUM_INVALID:
-              diagnostics_add(source_file, (struct Diagnostic){"Invalid numeric literal", from, i});
+              diagnostics_add(source_file, (struct Diagnostic){"Invalid numeric literal", range});
+              last_tk = TK_INVALID;
               break;
             case NUM_OVERFLOW:
-              diagnostics_add(source_file, (struct Diagnostic){"Number literal out of range", from, i});
+              diagnostics_add(source_file, (struct Diagnostic){"Number literal out of range", range});
+              last_tk = TK_INVALID;
               break;
             case NUM_OK:
               break;
           }
-        } else if (last_token_kind == TK_INVALID) {
-          diagnostics_add(source_file, (struct Diagnostic){"Unrecognised token", from, i});
-        }
+        } else if (last_tk == TK_INVALID) {
+          diagnostics_add(source_file, (struct Diagnostic){"Unrecognised token", range});
+        } else if (last_tk == TK_NEWLINE) {
+          lineno++;
+          if (vector_len(source_file->tokens) == 0) {
+            free(token_str);
+            goto skip_token_add;
+          }
+        } else if (last_tk == TK_PUNCT) {
+          // Skip comments.
+          if (strcmp(token_str, ";") == 0) {
+            while ((c = file_text[i++]) && c != '\n');
+            if (c == '\n') i -= 2;
+            curr_tk = TK_NONE;
+            free(token_str);
+            goto loop_end;
+          }
+        } 
 
-        if (!tokens_add(source_file, (struct Token){last_token_kind, token_str, value, from, i})) return false;
+        if (!tokens_add(source_file, (struct Token){last_tk, token_str, value, range})) {
+          return false;
+        }
       }
+
+skip_token_add:
       from = i;
     }
 
-    last_token_kind = curr_token_kind;
+loop_end:
+    last_tk = curr_tk;
+    i++;
+
+    if (c == '\0') break;
   }
 
   return true;
@@ -519,7 +594,7 @@ static inline struct Token *tokens_peek(struct SourceFile *source_file, size_t n
   return tokens_get(source_file, false, n);
 }
 
-static bool parse_label(struct SourceFile *source_file) {
+static bool parser_parse_line(struct SourceFile *source_file) {
   if (!source_file) return false;
 
   struct Token *first_token = tokens_peek(source_file, 1);
@@ -535,14 +610,8 @@ static bool parse_label(struct SourceFile *source_file) {
 
   if (tokens_peek(source_file, 1) && tokens_peek(source_file, 1)->kind == TK_NEWLINE) {
     tokens_consume(source_file, 1);    
-    return false;
+    return true;
   }
-
-  return true;
-}
-
-static void parse_instr(struct SourceFile *source_file) {
-  if (!source_file) return;
 
   struct OpcodeRec oprec;
   enum SyntaxKind *syntax_array = NULL;
@@ -551,19 +620,19 @@ static void parse_instr(struct SourceFile *source_file) {
 
   while (true) {
     struct Token *token = tokens_consume(source_file, 1);
-    if (!token) return;
+    if (!token) return false;
 
     if (syntax_array == NULL) {
       if (token->kind == TK_IDENT && get_oprec(token->text, &oprec)) {
           syntax_array = syntax_table[oprec.enc_t];
         } else {
-          diagnostics_add(source_file, (struct Diagnostic){"Expected a valid opcode mnemonic", token->start, token->end});
+          diagnostics_add(source_file, (struct Diagnostic){"Expected a valid opcode mnemonic", token->range});
           goto fail;
         }
     }
 
     if (token->kind == TK_NEWLINE && syntax_array[syntax_arr_i] != SK_END) {
-      diagnostics_add(source_file, (struct Diagnostic){"Incomplete instruction, expected more operands", 0, 0});
+      diagnostics_add(source_file, (struct Diagnostic){"Incomplete instruction, expected more operands", token->range});
       goto fail;
     }
 
@@ -575,14 +644,14 @@ static void parse_instr(struct SourceFile *source_file) {
 
       case SK_COMMA:
         if (token->kind != TK_PUNCT) {
-          diagnostics_add(source_file, (struct Diagnostic){"Expected \',\' between operands", token->start, token->end});
+          diagnostics_add(source_file, (struct Diagnostic){"Expected \',\' between operands", token->range});
           goto fail;
         }
         break;
 
       case SK_D8:
         if (token->kind != TK_NUM || token->value > 0xFF) {
-          diagnostics_add(source_file, (struct Diagnostic){"Expected a value within the range 0x00 - 0xFF (8-bit)", token->start, token->end});
+          diagnostics_add(source_file, (struct Diagnostic){"Expected a value within the range 0x00 - 0xFF (8-bit)", token->range});
           goto fail;
         }
 
@@ -594,7 +663,7 @@ static void parse_instr(struct SourceFile *source_file) {
       case SK_A16:
         if (token->kind == TK_NUM) {
           if (token->value > 0xFFFF) {
-            diagnostics_add(source_file, (struct Diagnostic){"Expected a value within the range 0x0000 - 0xFFFF (16-bit)", token->start, token->end});
+            diagnostics_add(source_file, (struct Diagnostic){"Expected a value within the range 0x0000 - 0xFFFF (16-bit)", token->range});
             goto fail;
           }
           parsed_instr.number.type = OP_VALUE;
@@ -603,7 +672,7 @@ static void parse_instr(struct SourceFile *source_file) {
           parsed_instr.number.type = OP_UNRESOLVED;
           parsed_instr.number.unresolved = token->text;
         } else {
-          diagnostics_add(source_file, (struct Diagnostic){"Expected a value within the range 0x0000 - 0xFFFF (16-bit)", token->start, token->end});
+          diagnostics_add(source_file, (struct Diagnostic){"Expected a value within the range 0x0000 - 0xFFFF (16-bit)", token->range});
           goto fail;
         }
         break;
@@ -611,7 +680,7 @@ static void parse_instr(struct SourceFile *source_file) {
       case SK_REG: {
         int register_c = register_code(token->text, oprec.enc_t);
         if (register_c == -1) {
-          diagnostics_add(source_file, (struct Diagnostic){"Expected a register", token->start, token->end});
+          diagnostics_add(source_file, (struct Diagnostic){"Expected a register", token->range});
           goto fail;
         }
         if (syntax_arr_i == 1) {
@@ -625,29 +694,27 @@ static void parse_instr(struct SourceFile *source_file) {
 
       case SK_END:
         if (token->kind != TK_NEWLINE) {
-          diagnostics_add(source_file, (struct Diagnostic){"Unexpected trailing tokens", 0, 0});
+          diagnostics_add(source_file, (struct Diagnostic){"Unexpected trailing tokens", token->range});
           goto fail;
         }
         parsed_items_add(source_file, (struct ParsedItem){.type = PARSED_INSTR, .instr = parsed_instr});
-        return;
+        return true;
     }
 
   syntax_arr_i++;
   }
 
-  return; // Should never be reached.
+  return true;
 
 fail:
   while (tokens_peek(source_file, 1) && tokens_peek(source_file, 1)->kind != TK_NEWLINE)
     tokens_consume(source_file, 1); // Consume everything till newline.
   tokens_consume(source_file, 1); // Consume newline.
+  return true;
 }
 
 static void parser_parse(struct SourceFile *source_file) {
-  while (tokens_peek(source_file, 1)) {
-    if (!parse_label(source_file)) continue;
-    parse_instr(source_file);
-  } 
+  while (parser_parse_line(source_file));
 }
 
 static uint8_t get_instr_size(enum EncType enc_t) {
@@ -774,68 +841,71 @@ static void resolve_labels(struct SourceFile *source_file) {
   }
 }
 
-struct SourceManager source_manager_new(void) {
-  struct SourceManager source_manager;
-  source_manager.source_files = vector_new(sizeof(struct SourceFile));
-  return source_manager;
-}
+static struct SourceFile *source_file_new(const char *file_name, char *file_text) {
+  if (!file_text || !file_name) return NULL;
 
-static void source_manager_free(struct SourceManager source_manager) {
-  size_t source_files_count = vector_len(source_manager.source_files);
-  for (size_t i = 0; i < source_files_count; i++) {
-    struct SourceFile *source_file = vector_get(source_manager.source_files, i); 
-    vector_free(source_file->line_offsets);
-    vector_free(source_file->diagnostics);
-    vector_free(source_file->labels);
-    vector_free(source_file->tokens);
-    vector_free(source_file->parsed_items);
-    free(source_file->text);
-  }
-  vector_free(source_manager.source_files);
-}
+  struct SourceFile *source_file = malloc(sizeof(struct SourceFile));
 
-static int source_manager_add_file(struct SourceManager *source_manager, char *text, const char *file_name) {
-  if (!source_manager || !text || !file_name) return -1;
-
-  struct Vector *line_offsets = vector_new(sizeof(size_t));
+  struct Vector *line_offsets = vector_new(sizeof(struct LineOffset));
   struct Vector *labels = vector_new(sizeof(struct Label));
   struct Vector *errors = vector_new(sizeof(struct Diagnostic));
   struct Vector *tokens = vector_new(sizeof(struct Token));
   struct Vector *parsed_items = vector_new(sizeof(struct ParsedItem));
 
-  if (!line_offsets || !errors || !tokens || !parsed_items) goto fail;
+  if (!source_file || !line_offsets || !errors || !tokens || !parsed_items) goto fail;
 
-  for (size_t i = 0, l = 0; text[i]; i++) {
-    if (text[i] == '\n') {
-      if (!vector_append(line_offsets, &l)) goto fail;
+  for (size_t i = 0, l = 0; ; i++) {
+    if (file_text[i] == '\n' || file_text[i] == '\0') {
+
+      struct LineOffset lo = {
+        .offset = l,
+        .len = i - l
+      };
+
+      if (!vector_append(line_offsets, &lo)) goto fail;
       l = i + 1;
+
+      if (file_text[i] == '\0') break;
     }
   }
 
-  size_t file_id = vector_len(source_manager->source_files);
+  source_file->text = file_text;
+  source_file->name = file_name;
+  source_file->line_offsets = line_offsets;
+  source_file->labels = labels;
+  source_file->diagnostics = errors;
+  source_file->tokens = tokens;
+  source_file->parsed_items = parsed_items;
 
-  struct SourceFile source_file = {
-    .id = file_id,
-    .text = text,
-    .name = file_name,
-    .line_offsets = line_offsets,
-    .labels = labels,
-    .diagnostics = errors,
-    .tokens = tokens,
-    .parsed_items = parsed_items
-   };
-
-  if (!vector_append(source_manager->source_files, &source_file)) goto fail;
-
-  return file_id;
+  return source_file;
 
 fail:
+  free(source_file);
   vector_free(line_offsets);
   vector_free(labels);
   vector_free(errors);
   vector_free(tokens);
   vector_free(parsed_items);
-  return -1;
+
+  return NULL;
+}
+
+static void source_file_free(struct SourceFile *source_file) {
+  vector_free(source_file->line_offsets);
+  vector_free(source_file->diagnostics);
+  vector_free(source_file->labels);
+
+  // Free token strings.
+  for (int i = 0; i < vector_len(source_file->tokens); i++) {
+    struct Token *token = vector_get(source_file->tokens, i);
+    free(token->text);
+  }
+
+  vector_free(source_file->tokens);
+  vector_free(source_file->parsed_items);
+  free(source_file->text);
+
+  free(source_file);
 }
 
 static size_t get_file_size(FILE *fp) {
@@ -869,6 +939,70 @@ end:
   return text;
 }
 
+static void lexer_print_tokens(struct SourceFile *source_file) {
+  for (int i = 0; i < vector_len(source_file->tokens); i++) {
+    struct Token *token = vector_get(source_file->tokens, i);
+    switch (token->kind) {
+      case TK_IDENT:
+        printf("IDENT: %s\n", token->text);
+        break;
+      case TK_NONE:
+        printf("NONE\n");
+        break;
+      case TK_INVALID:
+        printf("INVALID: %s\n", token->text);
+        break;
+      case TK_PUNCT:
+        printf("PUNCT %s\n", token->text);
+        break;
+      case TK_NEWLINE:
+        printf("NEWLINE\n");
+        break;
+      case TK_NUM:
+        printf("NUM: %s, %d\n", token->text, (int)token->value);
+        break;
+    }
+  }
+}
+
+static void parser_print_items(struct SourceFile *source_file) {
+  const char *enc_str[] = {
+    "ENC_NONE", "ENC_FIXED", "ENC_REG_REG", "ENC_REG_ID",
+    "ENC_REG_ARITH", "ENC_REG_PAIR_SP", "ENC_REG_PAIR_BG",
+    "ENC_REG_PAIR_PSW", "ENC_REG_PAIR_SP_IMM16", "ENC_REG_IMM8",
+    "ENC_ADDR16", "ENC_RST"};
+
+  for (int i = 0; i < vector_len(source_file->parsed_items); i++) {
+    struct ParsedItem *p = vector_get(source_file->parsed_items, i);
+    switch (p->type) {
+      case PARSED_NONE:
+        break;
+      case PARSED_LABEL:
+        printf("LABEL:\n");
+        printf("      %s\n", p->label.text);
+        break;
+      case PARSED_INSTR:
+        printf("INSTR:\n");
+        printf("      enc : %s\n", enc_str[p->instr.enc_t]);
+        printf("      op  : %x\n", p->instr.opcode);
+
+        printf("      num : ");
+        switch (p->instr.number.type) {
+          case OP_UNRESOLVED:
+            printf("%s (unresolved)\n", p->instr.number.unresolved);
+            break;
+          case OP_VALUE:
+            printf("%x\n", p->instr.number.value);
+            break;
+        }
+
+        printf("      r1  : %d\n", p->instr.reg1);
+        printf("      r2  : %d\n", p->instr.reg2);
+        break;
+    }
+  }
+}
+
 int main(int argc, char **argv) {
   if (argc != 2) {
     printf("expected a file\n");
@@ -882,13 +1016,17 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  struct SourceManager source_manager = source_manager_new();
-  int file_id = source_manager_add_file(&source_manager, file_text, file_name);
-  struct SourceFile *source_file = vector_get(source_manager.source_files, file_id);
+  struct SourceFile *source_file = source_file_new(file_name, file_text);
 
   lexer_tokenize(source_file);
   parser_parse(source_file);
 
-  source_manager_free(source_manager);
+  lexer_print_tokens(source_file);
+  printf("\n");
+  parser_print_items(source_file);
+  printf("\n");
+  diagnostics_print(source_file);
+
+  source_file_free(source_file);
   return 0;
 }

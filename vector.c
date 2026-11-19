@@ -44,9 +44,14 @@ bool vector_append(struct Vector *v, const void *value) {
   return true;
 }
 
-void *vector_get(struct Vector *v, size_t index) {
+void *vector_get_elem(struct Vector *v, size_t index) {
   if (!v || index >= v->len) return NULL;
   return ((uint8_t *)v->data + index * v->element_sz);
+}
+
+void *vector_get_data(struct Vector *v) {
+  if (!v) return NULL;
+  return v->data;
 }
 
 void vector_free(struct Vector *v) {

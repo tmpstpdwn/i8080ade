@@ -80,6 +80,7 @@ struct SourceFile {
   struct Vector* tokens;
   struct Vector* diagnostics;
   struct Vector* parsed_items;
+  struct Vector* buffer;
 };
 
 struct SourceRange {
@@ -247,7 +248,7 @@ static bool labels_resolve(struct SourceFile *source_file, const char *text, uin
   size_t label_table_len = vector_len(source_file->labels);
 
   for (size_t i = 0; i < label_table_len; i++) {
-    struct Label *label = vector_get(source_file->labels, i);
+    struct Label *label = vector_get_elem(source_file->labels, i);
     if (strcmp(label->text, text) == 0) {
       *resolved_val = label->addr;
       return true;
@@ -410,11 +411,11 @@ static void diagnostics_print(struct SourceFile *source_file) {
   if (!source_file) return;
 
   for (size_t i = 0; i < vector_len(source_file->diagnostics); i++) {
-    struct Diagnostic *diag = vector_get(source_file->diagnostics, i);
+    struct Diagnostic *diag = vector_get_elem(source_file->diagnostics, i);
 
     size_t line = diag->range.lineno;
 
-    struct LineOffset *line_offset = vector_get(source_file->line_offsets, line);
+    struct LineOffset *line_offset = vector_get_elem(source_file->line_offsets, line);
 
     size_t start = diag->range.start_offset;
     size_t end = diag->range.end_offset;
@@ -577,7 +578,7 @@ static struct Token* tokens_get(struct SourceFile *source_file, bool consume, si
   size_t step = n - 1;
   size_t tokens_len = vector_len(source_file->tokens);
   if (get_token_i + step < tokens_len) {
-    ret_token = vector_get(source_file->tokens, get_token_i + step);
+    ret_token = vector_get_elem(source_file->tokens, get_token_i + step);
     if (consume) {
       get_token_i += n;      
     }
@@ -621,6 +622,8 @@ static bool parser_parse_line(struct SourceFile *source_file) {
   while (true) {
     struct Token *token = tokens_consume(source_file, 1);
     if (!token) return false;
+
+    if (token->kind == TK_INVALID) goto fail;
 
     if (syntax_array == NULL) {
       if (token->kind == TK_IDENT && get_oprec(token->text, &oprec)) {
@@ -742,16 +745,16 @@ static uint8_t get_instr_size(enum EncType enc_t) {
   }
 }
 
-static uint32_t assemble_instr(struct ParsedInstr parsed_instr) {
+static uint32_t assemble_instr(struct ParsedInstr *parsed_instr) {
   uint32_t asmbld_instr = 0;
 
-  enum EncType enc_t = parsed_instr.enc_t;
-  uint8_t opcode = parsed_instr.opcode;
+  enum EncType enc_t = parsed_instr->enc_t;
+  uint8_t opcode = parsed_instr->opcode;
 
-  uint8_t register1_c = parsed_instr.reg1;
-  uint8_t register2_c = parsed_instr.reg2;
+  uint8_t register1_c = parsed_instr->reg1;
+  uint8_t register2_c = parsed_instr->reg2;
 
-  uint16_t number = parsed_instr.number.value;
+  uint16_t number = parsed_instr->number.value;
 
   switch (enc_t) {
     case ENC_NONE:
@@ -800,21 +803,49 @@ static uint32_t assemble_instr(struct ParsedInstr parsed_instr) {
       break;
   }
 
-  uint8_t size = get_instr_size(enc_t);
-  return (size << 24) | asmbld_instr;
+  return asmbld_instr;
 }
 
-static void build_label_table(struct SourceFile *source_file) {
+static bool assemble(struct SourceFile *source_file) {
+  for (int i = 0; i < vector_len(source_file->parsed_items); i++) {
+    struct ParsedItem *p = vector_get_elem(source_file->parsed_items, i);
+
+    switch (p->type) {
+      case PARSED_INSTR: {
+        uint8_t size = get_instr_size(p->instr.enc_t);
+        uint32_t assembled_instr = assemble_instr(&p->instr);
+        while (size) {
+          uint8_t b = assembled_instr & 0xFF; 
+          if (!vector_append(source_file->buffer, &b)) return false;
+          assembled_instr = assembled_instr >> 8;
+          size--;
+        }
+        break;
+      }
+      default:
+        break;
+    }
+
+  }
+  return true;
+}
+
+static void labels_build_table(struct SourceFile *source_file) {
   uint16_t address_counter = 0;
 
   size_t parsed_items_len = vector_len(source_file->parsed_items);
   for (int i = 0; i < parsed_items_len; i++) {
-    struct ParsedItem *p = vector_get(source_file->parsed_items, i);
+    struct ParsedItem *p = vector_get_elem(source_file->parsed_items, i);
+    uint16_t dummy;
     switch (p->type) {
       case PARSED_NONE:
         break;
       case PARSED_LABEL:
-        labels_add(source_file, (struct Label){p->label.text, address_counter});
+        if (labels_resolve(source_file, p->label.text, &dummy)) {
+          diagnostics_add(source_file, (struct Diagnostic){"Duplicate label", 0});
+        } else {
+          labels_add(source_file, (struct Label){p->label.text, address_counter});
+        }
         break;
       case PARSED_INSTR:
         address_counter += get_instr_size(p->instr.enc_t);
@@ -823,10 +854,10 @@ static void build_label_table(struct SourceFile *source_file) {
   }
 }
 
-static void resolve_labels(struct SourceFile *source_file) {
+static void labels_resolve_all(struct SourceFile *source_file) {
   size_t parsed_items_len = vector_len(source_file->parsed_items);
   for (int i = 0; i < parsed_items_len; i++) {
-    struct ParsedItem *p = vector_get(source_file->parsed_items, i);
+    struct ParsedItem *p = vector_get_elem(source_file->parsed_items, i);
     if (p->type == PARSED_INSTR) {
       if (p->instr.number.type == OP_UNRESOLVED) {
         uint16_t resolved_val = 0;
@@ -851,8 +882,10 @@ static struct SourceFile *source_file_new(const char *file_name, char *file_text
   struct Vector *errors = vector_new(sizeof(struct Diagnostic));
   struct Vector *tokens = vector_new(sizeof(struct Token));
   struct Vector *parsed_items = vector_new(sizeof(struct ParsedItem));
+  struct Vector *buffer = vector_new(sizeof(uint8_t));
 
-  if (!source_file || !line_offsets || !errors || !tokens || !parsed_items) goto fail;
+  if (!source_file || !line_offsets || !errors ||
+      !tokens || !parsed_items || !buffer) goto fail;
 
   for (size_t i = 0, l = 0; ; i++) {
     if (file_text[i] == '\n' || file_text[i] == '\0') {
@@ -876,6 +909,7 @@ static struct SourceFile *source_file_new(const char *file_name, char *file_text
   source_file->diagnostics = errors;
   source_file->tokens = tokens;
   source_file->parsed_items = parsed_items;
+  source_file->buffer = buffer;
 
   return source_file;
 
@@ -897,14 +931,15 @@ static void source_file_free(struct SourceFile *source_file) {
 
   // Free token strings.
   for (int i = 0; i < vector_len(source_file->tokens); i++) {
-    struct Token *token = vector_get(source_file->tokens, i);
+    struct Token *token = vector_get_elem(source_file->tokens, i);
     free(token->text);
   }
 
   vector_free(source_file->tokens);
   vector_free(source_file->parsed_items);
-  free(source_file->text);
+  vector_free(source_file->buffer);
 
+  free(source_file->text);
   free(source_file);
 }
 
@@ -941,7 +976,7 @@ end:
 
 static void lexer_print_tokens(struct SourceFile *source_file) {
   for (int i = 0; i < vector_len(source_file->tokens); i++) {
-    struct Token *token = vector_get(source_file->tokens, i);
+    struct Token *token = vector_get_elem(source_file->tokens, i);
     switch (token->kind) {
       case TK_IDENT:
         printf("IDENT: %s\n", token->text);
@@ -968,12 +1003,13 @@ static void lexer_print_tokens(struct SourceFile *source_file) {
 static void parser_print_items(struct SourceFile *source_file) {
   const char *enc_str[] = {
     "ENC_NONE", "ENC_FIXED", "ENC_REG_REG", "ENC_REG_ID",
-    "ENC_REG_ARITH", "ENC_REG_PAIR_SP", "ENC_REG_PAIR_BG",
+    "ENC_REG_ARITH", "ENC_REG_PAIR_SP", "ENC_REG_PAIR_BD",
     "ENC_REG_PAIR_PSW", "ENC_REG_PAIR_SP_IMM16", "ENC_REG_IMM8",
-    "ENC_ADDR16", "ENC_RST"};
+    "ENC_IMM8", "ENC_ADDR16", "ENC_RST"
+  };
 
   for (int i = 0; i < vector_len(source_file->parsed_items); i++) {
-    struct ParsedItem *p = vector_get(source_file->parsed_items, i);
+    struct ParsedItem *p = vector_get_elem(source_file->parsed_items, i);
     switch (p->type) {
       case PARSED_NONE:
         break;
@@ -1004,28 +1040,40 @@ static void parser_print_items(struct SourceFile *source_file) {
 }
 
 int main(int argc, char **argv) {
-  if (argc != 2) {
-    printf("expected a file\n");
+  if (argc != 3) {
+    printf("expected \"%s <file.asm-to-read> <file.bin-to-write>\"\n", argv[0]);
     return 1;
   }
-  const char *file_name = argv[1];
 
-  char *file_text = get_file_text(file_name);
+  const char *file_read_name = argv[1];
+  const char *file_write_name = argv[2];
+
+  char *file_text = get_file_text(file_read_name);
   if (!file_text) {
-    printf("Reading \'%s\' into a buffer failed", file_name);
+    printf("Reading \'%s\' into a buffer failed", file_read_name);
     return 1;
   }
 
-  struct SourceFile *source_file = source_file_new(file_name, file_text);
+  struct SourceFile *source_file = source_file_new(file_read_name, file_text);
 
   lexer_tokenize(source_file);
   parser_parse(source_file);
-
-  lexer_print_tokens(source_file);
-  printf("\n");
-  parser_print_items(source_file);
-  printf("\n");
+  labels_build_table(source_file);
+  labels_resolve_all(source_file);
   diagnostics_print(source_file);
+
+  if (!vector_len(source_file->diagnostics)) {
+    assemble(source_file);
+    FILE *fpw = fopen(file_write_name, "wb");
+    if (fpw) {
+      uint8_t *buffer_data = vector_get_data(source_file->buffer);
+      size_t buffer_len = vector_len(source_file->buffer);
+      size_t written = fwrite(buffer_data, sizeof(uint8_t), buffer_len, fpw);
+      if (written != buffer_len) fprintf(stderr, "Writing buffer to \'%s\' failed\n", file_write_name);
+      else printf("Written to %s\n", file_write_name);
+      fclose(fpw);
+    }
+  }
 
   source_file_free(source_file);
   return 0;

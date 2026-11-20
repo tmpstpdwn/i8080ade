@@ -1,3 +1,15 @@
+#ifndef PARSER_H
+#define PARSER_H
+
+#include <stdbool.h>
+#include <stdint.h>
+#include <stddef.h>
+
+#include "opcode.h"
+#include "lexer.h"
+
+struct SourceFile;
+
 enum OperandType {
   OP_VALUE,
   OP_LABEL
@@ -38,3 +50,9 @@ struct ParsedItem {
     struct ParsedLabel label;
   };
 };
+
+void parser_parse(struct SourceFile *source_file);
+void parser_validate(struct SourceFile *source_file);
+void parser_print_items(struct SourceFile *source_file);
+
+#endif

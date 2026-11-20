@@ -1,3 +1,15 @@
+#include <stdio.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#include "util/vector.h"
+#include "opcode.h"
+#include "lexer.h"
+#include "diagnostics.h"
+#include "parser.h"
+#include "assembler.h"
+
 enum SyntaxKind {
   SK_OPCODE,
   SK_COMMA,
@@ -36,8 +48,8 @@ static bool parser_parse_line(struct SourceFile *source_file) {
 
   if (first_token && first_token->kind == TK_IDENT) {
     if (second_token && second_token->kind == TK_PUNCT && second_token->text[0] == ':') {
-      struct ParsedLabel label = {first_token->text};
-      parsed_items_add(source_file, (struct ParsedItem){.type = PARSED_LABEL, .label = label});
+      struct ParsedLabel label = {first_token->text, first_token->range};
+      parser_add_item(source_file, (struct ParsedItem){.type = PARSED_LABEL, .label = label});
       lexer_consume_token(source_file, 2);
     }
   }
@@ -50,7 +62,7 @@ static bool parser_parse_line(struct SourceFile *source_file) {
   struct OpcodeRec oprec;
   const enum SyntaxKind *syntax_array = NULL;
   size_t syntax_arr_i = 0;
-  struct ParsedInstr parsed_instr = {ENC_NONE};
+  struct ParsedInstr parsed_instr = {0};
 
   while (true) {
     struct Token *token = lexer_consume_token(source_file, 1);
@@ -59,7 +71,7 @@ static bool parser_parse_line(struct SourceFile *source_file) {
     if (token->kind == TK_INVALID) goto fail;
 
     if (syntax_array == NULL) {
-      if (token->kind == TK_IDENT && get_oprec(token->text, &oprec)) {
+      if (token->kind == TK_IDENT && opcode_rec_get(token->text, &oprec)) {
           syntax_array = syntax_table[oprec.enc_t];
         } else {
           diagnostics_add(source_file, (struct Diagnostic){"Expected a valid opcode mnemonic", token->range});
@@ -89,16 +101,23 @@ static bool parser_parse_line(struct SourceFile *source_file) {
       case SK_D16:
       case SK_A16:
         if (token->kind != TK_NUM) {
-          diagnostics_add(source_file, (struct Diagnostic){"Expected a number", token->range});
-          goto fail;
+          if (syntax_array[syntax_arr_i] == SK_A16 && token->kind == TK_IDENT) {
+            parsed_instr.number.type = OP_LABEL;
+            parsed_instr.number.label = token->text;
+          } else {
+            diagnostics_add(source_file, (struct Diagnostic){"Expected a number", token->range});
+            goto fail;
+          }
+        } else {
+          parsed_instr.number.type = OP_VALUE;
+          parsed_instr.number.value = token->value;
         }
-        parsed_instr.number.type = OP_VALUE;
+
         parsed_instr.number.range = token->range;
-        parsed_instr.number.value = token->value;
         break;
 
       case SK_REG: {
-        int register_c = register_code(token->text, oprec.enc_t);
+        int register_c = opcode_reg_code(token->text, oprec.enc_t);
         if (register_c == -1) {
           diagnostics_add(source_file, (struct Diagnostic){"Expected a register", token->range});
           goto fail;
@@ -121,7 +140,7 @@ static bool parser_parse_line(struct SourceFile *source_file) {
           diagnostics_add(source_file, (struct Diagnostic){"Unexpected trailing tokens", token->range});
           goto fail;
         }
-        parsed_items_add(source_file, (struct ParsedItem){.type = PARSED_INSTR, .instr = parsed_instr});
+        parser_add_item(source_file, (struct ParsedItem){.type = PARSED_INSTR, .instr = parsed_instr});
         return true;
     }
 
@@ -131,20 +150,21 @@ static bool parser_parse_line(struct SourceFile *source_file) {
   return true;
 
 fail:
+
   while (lexer_peek_token(source_file, 1) && lexer_peek_token(source_file, 1)->kind != TK_NEWLINE)
     lexer_consume_token(source_file, 1); // Consume everything till newline.
   lexer_consume_token(source_file, 1); // Consume newline.
   return true;
 }
 
-static void parser_parse(struct SourceFile *source_file) {
+void parser_parse(struct SourceFile *source_file) {
   while (parser_parse_line(source_file));
 }
 
-static void parser_validate(struct SourceFile *source_file) {
-  for (int i = 0; i < vector_len(source_file->parsed_items); i++) {
+void parser_validate(struct SourceFile *source_file) {
+  for (size_t i = 0; i < vector_len(source_file->parsed_items); i++) {
     struct ParsedItem *p = vector_get_elem(source_file->parsed_items, i);
-    if (p->type != PARSED_INSTR) return; 
+    if (p->type != PARSED_INSTR) continue; 
 
     switch (p->instr.enc_t) {
       case ENC_REG_REG:
@@ -154,6 +174,9 @@ static void parser_validate(struct SourceFile *source_file) {
         }
         break;
       case ENC_ADDR16:
+        if (p->instr.number.type == OP_VALUE && p->instr.number.value > 0xFFFF)
+          diagnostics_add(source_file, (struct Diagnostic){"Expected an address within the range 0x0000 - 0xFFFF (16-bit)", p->instr.number.range});
+        break;
       case ENC_REG_PAIR_SP_IMM16:
         if (p->instr.number.value > 0xFFFF)
           diagnostics_add(source_file, (struct Diagnostic){"Expected a value within the range 0x0000 - 0xFFFF (16-bit)", p->instr.number.range});
@@ -173,7 +196,7 @@ static void parser_validate(struct SourceFile *source_file) {
   }
 }
 
-static void parser_print_items(struct SourceFile *source_file) {
+void parser_print_items(struct SourceFile *source_file) {
   const char *enc_str[] = {
     "ENC_NONE", "ENC_FIXED", "ENC_REG_REG", "ENC_REG_ID",
     "ENC_REG_ARITH", "ENC_REG_PAIR_SP", "ENC_REG_PAIR_BD",
@@ -181,7 +204,7 @@ static void parser_print_items(struct SourceFile *source_file) {
     "ENC_IMM8", "ENC_ADDR16", "ENC_RST"
   };
 
-  for (int i = 0; i < vector_len(source_file->parsed_items); i++) {
+  for (size_t i = 0; i < vector_len(source_file->parsed_items); i++) {
     struct ParsedItem *p = vector_get_elem(source_file->parsed_items, i);
     switch (p->type) {
       case PARSED_NONE:
@@ -201,12 +224,12 @@ static void parser_print_items(struct SourceFile *source_file) {
             printf("%s (unresolved)\n", p->instr.number.label);
             break;
           case OP_VALUE:
-            printf("0x%x\n", p->instr.number.value);
+            printf("0x%x\n", (int)p->instr.number.value);
             break;
         }
 
-        printf("      r1  : %d\n", p->instr.reg1.value);
-        printf("      r2  : %d\n", p->instr.reg2.value);
+        printf("      r1  : %d\n", (int)p->instr.reg1.value);
+        printf("      r2  : %d\n", (int)p->instr.reg2.value);
         break;
     }
   }

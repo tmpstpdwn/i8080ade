@@ -1,4 +1,12 @@
-static const struct OpcodeRec first_token[] = {
+#include <stdbool.h>
+#include <stdint.h>
+#include <stddef.h>
+#include <string.h>
+#include <ctype.h>
+
+#include "opcode.h"
+
+static const struct OpcodeRec opcode_rec[] = {
   {"NOP",       ENC_FIXED,                  0x00},
   {"LXI",       ENC_REG_PAIR_SP_IMM16,      0x01},
   {"STAX",      ENC_REG_PAIR_BD,            0x02},
@@ -77,10 +85,10 @@ static const struct OpcodeRec first_token[] = {
   {"EI",        ENC_FIXED,                  0xFB},
   {"CM",        ENC_ADDR16,                 0xFC},
   {"CPI",       ENC_IMM8,                   0xFE},
-  {NULL}
+  {NULL,        ENC_NONE,                   0x00}
 };
 
-static bool oprec_get(const char *mnemonic, struct OpcodeRec *oprec) {
+bool opcode_rec_get(const char *mnemonic, struct OpcodeRec *oprec) {
   if (!mnemonic) return false;
 
   int mnemonic_len = strlen(mnemonic);
@@ -94,9 +102,9 @@ static bool oprec_get(const char *mnemonic, struct OpcodeRec *oprec) {
   }
   mnemonic_upper[i] = '\0';
 
-  for (int i = 0; first_token[i].name != NULL; i++) {
-    if (strcmp(mnemonic_upper, first_token[i].name) == 0) {
-      *oprec = first_token[i];
+  for (int i = 0; opcode_rec[i].name != NULL; i++) {
+    if (strcmp(mnemonic_upper, opcode_rec[i].name) == 0) {
+      *oprec = opcode_rec[i];
       return true;
     }
   }
@@ -104,10 +112,79 @@ static bool oprec_get(const char *mnemonic, struct OpcodeRec *oprec) {
   return false;
 }
 
-static uint8_t opcode_instr_size(enum EncType enc_t) {
+int opcode_reg_code(const char *reg, enum EncType enc_t) {
+  if (!reg) return -1;
+
+  int reg_len = strlen(reg);
+  if (reg_len == 0 || reg_len > 3) return -1;
+
+  char reg_upper[4] = {0};
+  int i = 0;
+  while (reg[i] && i < 3) {
+    reg_upper[i] = toupper(reg[i]);
+    i++;
+  }
+  reg_upper[i] = '\0';
+
+  int n = -1;
+
+  if (reg_len == 1) {
+    switch (reg_upper[0]) {
+      case 'B':
+        n = 0; break;
+      case 'C':
+        n = 1; break;
+      case 'D':
+        n = 2; break;
+      case 'E':
+        n = 3; break;
+      case 'H':
+        n = 4; break;
+      case 'L':
+        n = 5; break;
+      case 'M':
+        n = 6; break;
+      case 'A':
+        n = 7; break;
+      default: break;
+    }
+  }
+
+  switch (enc_t) {
+    case ENC_REG_REG:
+    case ENC_REG_ID:
+    case ENC_REG_ARITH:
+    case ENC_REG_IMM8:
+        return n;
+
+    case ENC_REG_PAIR_BD: {
+        if (n >= 0 && n <= 2 && n % 2 == 0)
+          return n / 2;
+        return -1;
+    }
+
+    case ENC_REG_PAIR_SP:
+    case ENC_REG_PAIR_SP_IMM16:
+    case ENC_REG_PAIR_PSW: {
+        if (n >= 0 && n <= 4 && n % 2 == 0) {
+          return n / 2;
+        } else {
+          char *s = (enc_t == ENC_REG_PAIR_PSW)? "PSW": "SP";
+          if (strcmp(reg_upper, s) == 0) return 3;
+        }
+        return -1;
+    }
+
+    default:
+      return -1;
+  }
+}
+
+uint8_t opcode_instr_size(enum EncType enc_t) {
+  uint8_t size = 0;
   switch (enc_t) {
     case ENC_NONE:
-      return 0;
+      break;
 
     case ENC_RST:
     case ENC_FIXED:
@@ -117,14 +194,19 @@ static uint8_t opcode_instr_size(enum EncType enc_t) {
     case ENC_REG_PAIR_SP:
     case ENC_REG_PAIR_BD:
     case ENC_REG_PAIR_PSW:
-      return 1;
+      size = 1;
+      break;
 
     case ENC_IMM8:
     case ENC_REG_IMM8:
-      return 2;
+      size = 2;
+      break;
 
     case ENC_ADDR16:
     case ENC_REG_PAIR_SP_IMM16:
-      return 3;
+      size = 3;
+      break;
   }
+
+  return size;
 }

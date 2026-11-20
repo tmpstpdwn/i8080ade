@@ -1,9 +1,21 @@
-static bool diagnostics_add(struct SourceFile *source_file, struct Diagnostic diagnostic) {
+#include <stdio.h>
+#include <stdbool.h>
+#include <stddef.h>
+
+#include "util/vector.h"
+#include "lexer.h"
+#include "diagnostics.h"
+#include "assembler.h"
+
+#define RED   "\033[31m"
+#define RESET "\033[0m"
+
+bool diagnostics_add(struct SourceFile *source_file, struct Diagnostic diagnostic) {
   if (!source_file) return false;
   return vector_append(source_file->diagnostics, &diagnostic);
 }
 
-static void diagnostics_print(struct SourceFile *source_file) {
+void diagnostics_print(struct SourceFile *source_file) {
   if (!source_file) return;
 
   for (size_t i = 0; i < vector_len(source_file->diagnostics); i++) {

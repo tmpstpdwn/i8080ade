@@ -1,12 +1,14 @@
 CC      := gcc
-CFLAGS  := -std=c99 -Wall -Wextra -Wpedantic -O2 -Isrc
+CFLAGS  := -std=c11 -Wall -Wextra -Wpedantic -O2 -Isrc
 SRC     := $(shell find src -name '*.c')
 OBJ     := $(SRC:src/%.c=build/%.o)
 DEP     := $(OBJ:.o=.d)
 
-all: build/i8080
+TARGET := build/i8080ade
 
-build/i8080: $(OBJ)
+all: $(TARGET)
+
+$(TARGET): $(OBJ)
 	$(CC) $^ -o $@
 
 build/%.o: src/%.c
@@ -23,4 +25,5 @@ clean:
 	rm -rf build
 
 -include $(DEP)
+
 .PHONY: all debug test clean

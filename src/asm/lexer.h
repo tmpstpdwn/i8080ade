@@ -1,5 +1,11 @@
+#ifndef LEXER_H
+#define LEXER_H
+
 #include <stdint.h>
 #include <stddef.h>
+#include <stdbool.h>
+
+struct SourceFile;
 
 enum TokenKind {
   TK_NONE,
@@ -22,3 +28,10 @@ struct Token {
   uint64_t value;
   struct SourceRange range;
 };
+
+struct Token *lexer_consume_token(struct SourceFile *source_file, size_t n);
+struct Token *lexer_peek_token(struct SourceFile *source_file, size_t n);
+bool lexer_tokenize(struct SourceFile *source_file);
+void lexer_print_tokens(struct SourceFile *source_file);
+
+#endif

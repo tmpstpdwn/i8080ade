@@ -322,7 +322,7 @@ bool disassemble_rom(const char *read_from) {
 
   rom_buff = malloc(fsize);
 
-  if (rom_buff == NULL || fread(rom_buff, 1, fsize, fp) != fsize) {
+  if (rom_buff == NULL || fread(rom_buff, 1, fsize, fp) != (uint64_t)fsize) {
     printf("Loading rom to memory failed.\n");
     free(rom_buff);
     fclose(fp);
@@ -330,7 +330,7 @@ bool disassemble_rom(const char *read_from) {
   }
 
   // Disassembly of the entire rome.
-  while (pc < fsize) {
+  while (pc < (uint64_t)fsize) {
     int size = disassemble(rom_buff, pc);
     pc += size;
   }

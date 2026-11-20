@@ -5,6 +5,12 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <stdio.h>
+
+#include "util/vector.h"
+#include "lexer.h"
+#include "diagnostics.h"
+#include "assembler.h"
 
 enum NumParseRes {
   NUM_OK,
@@ -78,26 +84,25 @@ static bool lexer_add_token(struct SourceFile *source_file, struct Token token) 
 static struct Token* lexer_get_token(struct SourceFile *source_file, bool consume, size_t n) {
   if (!source_file || n == 0) return NULL;
 
-  static size_t get_token_i = 0;
   struct Token *ret_token = NULL;
 
   size_t step = n - 1;
   size_t tokens_len = vector_len(source_file->tokens);
-  if (get_token_i + step < tokens_len) {
-    ret_token = vector_get_elem(source_file->tokens, get_token_i + step);
+  if (source_file->token_cursor + step < tokens_len) {
+    ret_token = vector_get_elem(source_file->tokens, source_file->token_cursor + step);
     if (consume) {
-      get_token_i += n;      
+      source_file->token_cursor += n;      
     }
   }
 
   return ret_token;
 }
 
-static inline struct Token *lexer_consume_token(struct SourceFile *source_file, size_t n) {
+struct Token *lexer_consume_token(struct SourceFile *source_file, size_t n) {
   return lexer_get_token(source_file, true, n);
 }
 
-static inline struct Token *lexer_peek_token(struct SourceFile *source_file, size_t n) {
+struct Token *lexer_peek_token(struct SourceFile *source_file, size_t n) {
   return lexer_get_token(source_file, false, n);
 }
 
@@ -126,7 +131,7 @@ static inline bool lexer_single_token(char c) {
   return tokenkind == TK_PUNCT || tokenkind == TK_INVALID;
 }
 
-static bool lexer_tokenize(struct SourceFile *source_file) {
+bool lexer_tokenize(struct SourceFile *source_file) {
   if (!source_file) return false;
 
   char *file_text = source_file->text;
@@ -167,10 +172,10 @@ static bool lexer_tokenize(struct SourceFile *source_file) {
           diagnostics_add(source_file, (struct Diagnostic){"Unrecognised token", range});
         } else if (last_tk == TK_NEWLINE) {
           lineno++;
-          if (vector_len(source_file->tokens) == 0) {
-            free(token_str);
+          free(token_str);
+          token_str = NULL;
+          if (vector_len(source_file->tokens) == 0)
             goto skip_token_add;
-          }
         } else if (last_tk == TK_PUNCT) {
           // Skip comments.
           if (strcmp(token_str, ";") == 0) {
@@ -182,7 +187,7 @@ static bool lexer_tokenize(struct SourceFile *source_file) {
           }
         } 
 
-        if (!tokens_add(source_file, (struct Token){last_tk, token_str, value, range})) {
+        if (!lexer_add_token(source_file, (struct Token){last_tk, token_str, value, range})) {
           return false;
         }
       }
@@ -199,13 +204,13 @@ loop_end:
   }
 
   if (vector_len(source_file->tokens) != 0 && last_tk != TK_NEWLINE)
-    return tokens_add(source_file, (struct Token){TK_NEWLINE, NULL, 0, 0});
+    return lexer_add_token(source_file, (struct Token){TK_NEWLINE, NULL, 0, {0}});
 
   return true;
 }
 
-static void lexer_print_tokens(struct SourceFile *source_file) {
-  for (int i = 0; i < vector_len(source_file->tokens); i++) {
+void lexer_print_tokens(struct SourceFile *source_file) {
+  for (size_t i = 0; i < vector_len(source_file->tokens); i++) {
     struct Token *token = vector_get_elem(source_file->tokens, i);
     switch (token->kind) {
       case TK_IDENT:

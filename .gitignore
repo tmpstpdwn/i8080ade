@@ -1,3 +1,6 @@
+.cache/
 roms/
+build/
 a.out
 i8080ade
+compile_commands.json

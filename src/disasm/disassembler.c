@@ -6,8 +6,8 @@
 
 #include "disassembler.h"
 
-static int disassemble(uint8_t *buff, size_t pc) {
-  int size = 1;
+size_t disassemble(uint8_t *buff, size_t pc) {
+  size_t size = 1;
   uint8_t instr = buff[pc];
 
   switch (instr) {
@@ -293,50 +293,8 @@ static int disassemble(uint8_t *buff, size_t pc) {
     case 0xFE: printf("CPI 0x%02X\n", buff[pc + 1]); size = 2; break;
     case 0xFF: printf("RST 7\n"); break;
 
-    default: printf("NOP\n");
+    default: printf("; Unrecognized Instruction: 0x%02X\n", instr);
   }
 
   return size;
-}
-
-bool disassemble_rom(const char *read_from) {
-  FILE *fp = fopen(read_from, "rb");
-
-  if (!fp) {
-    printf("Opening file \'%s\' failed.\n", read_from);
-    return false;
-  }
-
-  fseek(fp, 0, SEEK_END);
-  int fsize = ftell(fp);
-  rewind(fp);
-
-  if (fsize <= 0) {
-    printf("File size determination failed.\n");
-    fclose(fp);
-    return false;
-  }
-
-  uint8_t *rom_buff = NULL;
-  size_t pc = 0;
-
-  rom_buff = malloc(fsize);
-
-  if (rom_buff == NULL || fread(rom_buff, 1, fsize, fp) != (uint64_t)fsize) {
-    printf("Loading rom to memory failed.\n");
-    free(rom_buff);
-    fclose(fp);
-    return false;
-  }
-
-  // Disassembly of the entire rome.
-  while (pc < (uint64_t)fsize) {
-    int size = disassemble(rom_buff, pc);
-    pc += size;
-  }
-
-  free(rom_buff);
-  fclose(fp);
-
-  return true;
 }

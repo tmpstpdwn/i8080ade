@@ -100,99 +100,79 @@ struct Token *lexer_peek_token(struct SourceFile *source_file, size_t n) {
   return lexer_get_token(source_file, false, n);
 }
 
-static enum TokenKind lexer_get_tk(enum TokenKind last_token_kind, char curr_token) {
-  if (isalpha(curr_token) || curr_token == '_') {
-    if (last_token_kind == TK_NUM)
-      return TK_NUM;
-    return TK_IDENT;
+static bool emit_token(struct SourceFile *source_file, enum TokenKind kind,
+                 size_t line, size_t from, size_t to) {
+  struct SourceRange range = {line, from, to};
+  uint64_t value = 0;
+  char *str = NULL;
+
+  if (kind != TK_NEWLINE) {
+    str = substr(source_file->text, from, to);
+    if (!str) return false;
   }
 
-  else if (isdigit(curr_token)) {
-    if (last_token_kind == TK_IDENT)
-      return TK_IDENT;
-    return TK_NUM;
+  if (kind == TK_NUM && !str_to_num(str, &value)) {
+    diagnostics_add(source_file, (struct Diagnostic){"Invalid number literal", range});
+    kind = TK_INVALID;
+  } else if (kind == TK_INVALID) {
+    diagnostics_add(source_file, (struct Diagnostic){"Unrecognised token", range});
   }
 
-  if (curr_token == ',' || curr_token == ':' || curr_token == ';') return TK_PUNCT;
-  else if (curr_token == '\n') return TK_NEWLINE;
-  else if (isspace(curr_token) || curr_token == '\0') return TK_NONE;
-
-  return TK_INVALID;
-}
-
-static inline bool lexer_single_token(char c) {
-  enum TokenKind tokenkind = lexer_get_tk(TK_NONE, c);
-  return tokenkind == TK_PUNCT || tokenkind == TK_INVALID;
+  if (!lexer_add_token(source_file, (struct Token){kind, str, value, range})) {
+    free(str);
+    return false;
+  }
+  return true;
 }
 
 bool lexer_tokenize(struct SourceFile *source_file) {
   if (!source_file) return false;
 
-  char *file_text = source_file->text;
+  const char *s = source_file->text;
+  size_t i = 0, line = 0;
+  enum TokenKind prev = TK_NONE;
 
-  enum TokenKind last_tk = TK_NONE;
-  enum TokenKind curr_tk = TK_NONE;
+  for (;;) {
+    while (s[i] == ' ' || s[i] == '\t' || s[i] == '\r') i++;
+    if (s[i] == ';')
+      while (s[i] && s[i] != '\n') i++;
 
-  size_t i = 0;
-  size_t from = 0;
-  size_t lineno = 0;
-
-  while (true) {
-    char c = file_text[i];
-    curr_tk = lexer_get_tk(last_tk, c);
-
-    // Process tokens.
-    if (curr_tk != last_tk || lexer_single_token(c)) {
-      if (last_tk != TK_NONE) {
-        char *token_str = substr(file_text, from, i);
-        if (!token_str) return false;
-        struct SourceRange range = {lineno, from, i};
-        uint64_t value = 0;
-
-        if (last_tk == TK_NUM) {
-          if (!str_to_num(token_str, &value))
-            last_tk = TK_INVALID;
-        } else if (last_tk == TK_INVALID) {
-          diagnostics_add(source_file, (struct Diagnostic){"Unrecognised token", range});
-        } else if (last_tk == TK_NEWLINE) {
-          free(token_str);
-          token_str = NULL;
-          if (vector_len(source_file->tokens) == 0)
-            goto skip_token_add;
-        } else if (last_tk == TK_PUNCT) {
-          // Skip comments.
-          if (strcmp(token_str, ";") == 0) {
-            while ((c = file_text[i++]) && c != '\n');
-            if (c == '\n') i -= 2;
-            curr_tk = TK_NONE;
-            free(token_str);
-            token_str = NULL;
-            goto loop_end;
-          }
-        } 
-
-        if (!lexer_add_token(source_file, (struct Token){last_tk, token_str, value, range})) {
-          return false;
-        }
-
-      }
-
-skip_token_add:
-      from = i;
-    }
-
-loop_end:
+    unsigned char c = (unsigned char)s[i];
     if (c == '\0') break;
 
-    if (last_tk == TK_NEWLINE) lineno++;
+    size_t from = i;
+    enum TokenKind kind;
 
-    last_tk = curr_tk;
-    i++;
+    if (c == '\n') {
+      i++;
+      if (prev != TK_NONE && prev != TK_NEWLINE) {
+        if (!emit_token(source_file, TK_NEWLINE, line, from, i)) return false;
+        prev = TK_NEWLINE;
+      }
+      line++;
+      continue;
+    }
+
+    if (isdigit(c)) {
+      while (isalnum((unsigned char)s[i])) i++;
+      kind = TK_NUM;
+    } else if (isalpha(c) || c == '_') {
+      while (isalnum((unsigned char)s[i]) || s[i] == '_') i++;
+      kind = TK_IDENT;
+    } else if (c == ',' || c == ':') {
+      i++;
+      kind = TK_PUNCT;
+    } else {
+      i++;
+      kind = TK_INVALID;
+    }
+
+    if (!emit_token(source_file, kind, line, from, i)) return false;
+    prev = kind;
   }
 
-  if (vector_len(source_file->tokens) != 0 && last_tk != TK_NEWLINE)
-    return lexer_add_token(source_file, (struct Token){TK_NEWLINE, NULL, 0, {lineno, 0, 0}});
-
+  if (prev != TK_NONE && prev != TK_NEWLINE)
+    emit_token(source_file, TK_NEWLINE, line, 0, 0);
   return true;
 }
 

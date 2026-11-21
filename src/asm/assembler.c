@@ -97,10 +97,10 @@ static bool assemble(struct SourceFile *source_file, struct Vector *buffer) {
     }
 
   }
-  return true;
+  return vector_len(buffer) > 0;
 }
 
-static struct SourceFile *source_file_new(const char *file_name, char *file_text) {
+static struct SourceFile *source_file_new(const char *file_name, const char *file_text) {
   if (!file_text || !file_name) return NULL;
 
   struct SourceFile *source_file = malloc(sizeof(struct SourceFile));
@@ -165,7 +165,6 @@ static void source_file_free(struct SourceFile *source_file) {
   vector_free(source_file->tokens);
   vector_free(source_file->parsed_items);
 
-  free(source_file->text);
   free(source_file);
 }
 

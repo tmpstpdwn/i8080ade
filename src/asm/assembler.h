@@ -13,7 +13,7 @@ struct LineOffset {
 };
 
 struct SourceFile {
-  char *text;
+  const char *text;
   const char *name;
   struct Vector *line_offsets;
   struct Vector *labels;

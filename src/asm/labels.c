@@ -67,7 +67,7 @@ void labels_resolve_all(struct SourceFile *source_file) {
           p->instr.number.type = OP_VALUE;
           p->instr.number.value = resolved_val;
         } else {
-          diagnostics_add(source_file, (struct Diagnostic){"Undefined Symbol", p->instr.number.range});
+          diagnostics_add(source_file, (struct Diagnostic){"Undefined label", p->instr.number.range});
         }
       }
     }

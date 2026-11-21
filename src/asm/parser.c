@@ -40,6 +40,18 @@ static bool parser_add_item(struct SourceFile *source_file, struct ParsedItem pa
   return vector_append(source_file->parsed_items, &parsed_item);
 }
 
+static void consume_line(struct SourceFile *source_file) {
+  size_t i = 1;
+  struct Token *token;
+
+  while ((token = lexer_peek_token(source_file, i)) && token->kind != TK_NEWLINE)
+    i++;
+
+  lexer_consume_token(source_file, i);
+
+  token = lexer_peek_token(source_file, 1);
+}
+
 static bool parser_parse_line(struct SourceFile *source_file) {
   if (!source_file) return false;
 
@@ -65,7 +77,7 @@ static bool parser_parse_line(struct SourceFile *source_file) {
   struct ParsedInstr parsed_instr = {0};
 
   while (true) {
-    struct Token *token = lexer_consume_token(source_file, 1);
+    struct Token *token = lexer_peek_token(source_file, 1);
     if (!token) return false;
 
     if (token->kind == TK_INVALID) goto fail;
@@ -80,7 +92,10 @@ static bool parser_parse_line(struct SourceFile *source_file) {
     }
 
     if (token->kind == TK_NEWLINE && syntax_array[syntax_arr_i] != SK_END) {
-      diagnostics_add(source_file, (struct Diagnostic){"Incomplete instruction, expected more operands", token->range});
+      struct LineOffset *lo = vector_get_elem(source_file->line_offsets, token->range.lineno);
+      struct SourceRange range = {0};
+      if (lo) range = (struct SourceRange){token->range.lineno, lo->offset, lo->offset + lo->len};
+      diagnostics_add(source_file, (struct Diagnostic){"Incomplete instruction, expected more operands", range});
       goto fail;
     }
 
@@ -141,19 +156,21 @@ static bool parser_parse_line(struct SourceFile *source_file) {
           goto fail;
         }
         parser_add_item(source_file, (struct ParsedItem){.type = PARSED_INSTR, .instr = parsed_instr});
-        return true;
+        break;
     }
 
-  syntax_arr_i++;
+    lexer_consume_token(source_file, 1);
+    syntax_arr_i++;
+
+    if (token->kind == TK_NEWLINE) break;
   }
 
-  return true;
+  // Should only be reached once the whole line is done with.
+  return true; 
 
 fail:
-
-  while (lexer_peek_token(source_file, 1) && lexer_peek_token(source_file, 1)->kind != TK_NEWLINE)
-    lexer_consume_token(source_file, 1); // Consume everything till newline.
-  lexer_consume_token(source_file, 1); // Consume newline.
+  // In case parsing a line fails, consume all tokens left in the line.
+  consume_line(source_file);
   return true;
 }
 

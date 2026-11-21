@@ -12,15 +12,9 @@
 #include "diagnostics.h"
 #include "assembler.h"
 
-enum NumParseRes {
-  NUM_OK,
-  NUM_OVERFLOW,
-  NUM_INVALID
-};
-
-static enum NumParseRes str_to_num(const char *str, uint64_t *num) {
+static bool str_to_num(const char *str, uint64_t *num) {
   if (!str || !*str || !num)
-    return NUM_INVALID;
+    return false;
 
   int base = 10;
   const char *p = str;
@@ -37,7 +31,7 @@ static enum NumParseRes str_to_num(const char *str, uint64_t *num) {
   }
 
   if (!*p)
-    return NUM_INVALID;
+    return false;
 
   errno = 0;
   char *end;
@@ -46,13 +40,13 @@ static enum NumParseRes str_to_num(const char *str, uint64_t *num) {
   unsigned long long value = strtoull(p, &end, base);
 
   if (errno == ERANGE || value > UINT64_MAX)
-    return NUM_OVERFLOW;
+    return false;
 
   if (end == p || *end != '\0')
-    return NUM_INVALID;
+    return false;
 
   *num = (uint64_t)value;
-  return NUM_OK;
+  return true;
 }
 
 // Returns a malloc'ed, null terminated string which much be free'd.
@@ -146,32 +140,21 @@ bool lexer_tokenize(struct SourceFile *source_file) {
   while (true) {
     char c = file_text[i];
     curr_tk = lexer_get_tk(last_tk, c);
-    
+
     // Process tokens.
     if (curr_tk != last_tk || lexer_single_token(c)) {
       if (last_tk != TK_NONE) {
         char *token_str = substr(file_text, from, i);
         if (!token_str) return false;
-        uint64_t value = 0;
         struct SourceRange range = {lineno, from, i};
+        uint64_t value = 0;
 
         if (last_tk == TK_NUM) {
-          switch (str_to_num(token_str, &value)) {
-            case NUM_INVALID:
-              diagnostics_add(source_file, (struct Diagnostic){"Invalid numeric literal", range});
-              last_tk = TK_INVALID;
-              break;
-            case NUM_OVERFLOW:
-              diagnostics_add(source_file, (struct Diagnostic){"Number literal out of range", range});
-              last_tk = TK_INVALID;
-              break;
-            case NUM_OK:
-              break;
-          }
+          if (!str_to_num(token_str, &value))
+            last_tk = TK_INVALID;
         } else if (last_tk == TK_INVALID) {
           diagnostics_add(source_file, (struct Diagnostic){"Unrecognised token", range});
         } else if (last_tk == TK_NEWLINE) {
-          lineno++;
           free(token_str);
           token_str = NULL;
           if (vector_len(source_file->tokens) == 0)
@@ -183,6 +166,7 @@ bool lexer_tokenize(struct SourceFile *source_file) {
             if (c == '\n') i -= 2;
             curr_tk = TK_NONE;
             free(token_str);
+            token_str = NULL;
             goto loop_end;
           }
         } 
@@ -190,6 +174,7 @@ bool lexer_tokenize(struct SourceFile *source_file) {
         if (!lexer_add_token(source_file, (struct Token){last_tk, token_str, value, range})) {
           return false;
         }
+
       }
 
 skip_token_add:
@@ -199,12 +184,14 @@ skip_token_add:
 loop_end:
     if (c == '\0') break;
 
+    if (last_tk == TK_NEWLINE) lineno++;
+
     last_tk = curr_tk;
     i++;
   }
 
   if (vector_len(source_file->tokens) != 0 && last_tk != TK_NEWLINE)
-    return lexer_add_token(source_file, (struct Token){TK_NEWLINE, NULL, 0, {0}});
+    return lexer_add_token(source_file, (struct Token){TK_NEWLINE, NULL, 0, {lineno, 0, 0}});
 
   return true;
 }

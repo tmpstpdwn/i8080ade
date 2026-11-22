@@ -25,13 +25,12 @@ struct SourceRange {
 struct Token {
   enum TokenKind kind;
   char *text;
-  uint64_t value;
   struct SourceRange range;
 };
 
+bool lexer_tokenize(struct SourceFile *source_file);
 struct Token *lexer_consume_token(struct SourceFile *source_file, size_t n);
 struct Token *lexer_peek_token(struct SourceFile *source_file, size_t n);
-bool lexer_tokenize(struct SourceFile *source_file);
 void lexer_print_tokens(struct SourceFile *source_file);
 
 #endif

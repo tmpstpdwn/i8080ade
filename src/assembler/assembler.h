@@ -23,6 +23,6 @@ struct SourceFile {
   size_t token_cursor;
 };
 
-struct Vector *assemble_source(char *s, const char *file_name, struct Vector *buffer);
+struct Vector *assemble_source(const char *file_text, const char *file_name, struct Vector *buffer);
 
 #endif

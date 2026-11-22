@@ -5,8 +5,8 @@
 #include <stdint.h>
 
 #include "util/vector.h"
-#include "asm/assembler.h"
-#include "disasm/disassembler.h"
+#include "assembler/assembler.h"
+#include "disassembler/disassembler.h"
 
 static void print_usage(FILE *out, const char *prog) {
   fprintf(out,

@@ -168,17 +168,17 @@ static void source_file_free(struct SourceFile *source_file) {
   free(source_file);
 }
 
-struct Vector *assemble_source(char *s, const char *file_name, struct Vector *buffer) {
-  if (!s || !file_name || !buffer) return NULL;
+struct Vector *assemble_source(const char *file_text, const char *file_name, struct Vector *buffer) {
+  if (!file_text || !file_name || !buffer) return NULL;
 
-  struct SourceFile *source_file = source_file_new(file_name, s);
+  struct SourceFile *source_file = source_file_new(file_name, file_text);
   if (!source_file) return NULL;
 
   lexer_tokenize(source_file);
   parser_parse(source_file);
-  parser_validate(source_file);
   labels_build_table(source_file);
   labels_resolve_all(source_file);
+  parser_validate(source_file);
   diagnostics_print(source_file);
 
   struct Vector *result = NULL;

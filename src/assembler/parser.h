@@ -5,8 +5,9 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#include "opcode.h"
+#include "i8080.h"
 #include "lexer.h"
+#include "util/slice.h"
 
 struct SourceFile;
 
@@ -26,12 +27,12 @@ struct Operand {
   struct SourceRange range;
   union {
     uint64_t value;
-    char *label;
+    struct Slice label;
   };
 };
 
 struct ParsedLabel {
-  char *text;
+  struct Slice text;
   struct SourceRange range;
 };
 

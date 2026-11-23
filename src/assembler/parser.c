@@ -1,13 +1,8 @@
 #include <stdio.h>
-#include <stdbool.h>
-#include <stddef.h>
-#include <stdint.h>
 #include <ctype.h>
-#include <string.h>
 
-#include "assembler/lexer.h"
 #include "util/vector.h"
-#include "opcode.h"
+#include "i8080.h"
 #include "lexer.h"
 #include "diagnostics.h"
 #include "parser.h"
@@ -62,17 +57,15 @@ static const struct InstrGrammar *grammar_for(enum EncType enc_t) {
   return NULL;
 }
 
-static bool is_mnemonic(const char *s) {
-  if (!s) return false;
-  struct OpcodeRec oprec;
-  return opcode_rec_get(s, &oprec);
+static bool is_mnemonic(struct Slice s) {
+  struct OpcodeRec dummy;
+  return i8080_opcode_rec(s, &dummy);
 }
 
-static bool is_reg(const char *s) {
-  if (!s) return false;
-  return (opcode_reg_code(s, ENC_REG_REG) != -1 ||
-          opcode_reg_code(s, ENC_REG_PAIR_PSW) != -1 ||
-          opcode_reg_code(s, ENC_REG_PAIR_SP) != -1 );
+static bool is_reg(struct Slice s) {
+  return i8080_reg_code(s, ENC_REG_REG)     != -1 ||
+         i8080_reg_code(s, ENC_REG_PAIR_PSW) != -1 ||
+         i8080_reg_code(s, ENC_REG_PAIR_SP)  != -1;
 }
 
 static int digit_value(int c) {
@@ -82,26 +75,27 @@ static int digit_value(int c) {
   return -1;
 }
 
-static bool parse_number(const char *str, uint64_t *num) {
-  if (!str || !*str || !num) return false;
+static bool parse_number(struct Slice s, uint64_t *num) {
+  if (!num || !s.text || s.len == 0) return false;
 
   int base = 10;
-  const char *p = str;
+  size_t i = 0;
 
-  if (p[0] == '0') {
-    switch (tolower((unsigned char)p[1])) {
+  if (s.len >= 2 && s.text[0] == '0') {
+    switch (tolower((unsigned char)s.text[1])) {
       case 'x': base = 16; break;
       case 'b': base = 2;  break;
       case 'o': base = 8;  break;
+      default: break;
     }
-    if (base != 10) p += 2;
+    if (base != 10) i = 2;
   }
 
-  if (!*p) return false;
+  if (i >= s.len) return false;
 
   uint64_t v = 0;
-  for (; *p; p++) {
-    int d = digit_value((unsigned char)*p);
+  for (; i < s.len; i++) {
+    int d = digit_value((unsigned char)s.text[i]);
     if (d < 0 || d >= base) return false;
     if (v > (UINT64_MAX - (uint64_t)d) / (uint64_t)base) return false;
     v = v * (uint64_t)base + (uint64_t)d;
@@ -137,16 +131,17 @@ static int parse_label(struct SourceFile *source_file) {
 
   if (!first_token || !second_token) return -1;
 
-  if (second_token->kind == TK_PUNCT && strcmp(second_token->text, ":") == 0) {
+  char punct = source_file->text[second_token->range.start_offset];
+  if (second_token->kind == TK_PUNCT && punct == ':') {
     if (first_token->kind == TK_IDENT) {
-      if (is_mnemonic(first_token->text)) {
+      if (is_mnemonic(first_token->slice)) {
         diagnostics_add(source_file, (struct Diagnostic){"Instruction mnemonic can't be used as a label", first_token->range});
       }
-      else if (is_reg(first_token->text)) {
+      else if (is_reg(first_token->slice)) {
         diagnostics_add(source_file, (struct Diagnostic){"Register name can't be used as a label", first_token->range});
       }
       else {
-        struct ParsedLabel label = {first_token->text, first_token->range};
+        struct ParsedLabel label = {first_token->slice, first_token->range};
         add_parsed_item(source_file, (struct ParsedItem){.type = PARSED_LABEL, .label = label});
       }
     } else {
@@ -178,7 +173,7 @@ static void parse_instr(struct SourceFile *source_file) {
     if (!token) return;
 
     if (grammar_arr == NULL) {
-      if (token->kind == TK_IDENT && opcode_rec_get(token->text, &oprec)) {
+      if (token->kind == TK_IDENT && i8080_opcode_rec(token->slice, &oprec)) {
         const struct InstrGrammar *grammar = grammar_for(oprec.enc_t);
         if (!grammar) goto fail;
         grammar_arr = grammar->arr;
@@ -205,7 +200,7 @@ static void parse_instr(struct SourceFile *source_file) {
         break;
 
       case IGE_COMMA:
-        if (token->kind != TK_PUNCT || token->text[0] != ',') {
+        if (token->kind != TK_PUNCT || token->slice.text[0] != ',') {
           diagnostics_add(source_file, (struct Diagnostic){"Expected \',\' between operands", token->range});
           goto fail;
         }
@@ -215,7 +210,7 @@ static void parse_instr(struct SourceFile *source_file) {
       case IGE_D16:
       case IGE_A16:
         if (token->kind == TK_NUM) {
-          if (parse_number(token->text, &parsed_instr.number.value)) {
+          if (parse_number(token->slice, &parsed_instr.number.value)) {
             parsed_instr.number.type = OP_VALUE;
           } else {
             diagnostics_add(source_file, (struct Diagnostic){"Received a malformed number literal", token->range});
@@ -225,7 +220,7 @@ static void parse_instr(struct SourceFile *source_file) {
           if (curr_ige == IGE_A16) {
             if (token->kind == TK_IDENT) {
               parsed_instr.number.type = OP_LABEL;
-              parsed_instr.number.label = token->text;
+              parsed_instr.number.label = token->slice;
             } else {
               diagnostics_add(source_file, (struct Diagnostic){"Expected a valid number literal or a label", token->range});
               goto fail;
@@ -240,7 +235,7 @@ static void parse_instr(struct SourceFile *source_file) {
         break;
 
       case IGE_REG: {
-        int register_c = opcode_reg_code(token->text, oprec.enc_t);
+        int register_c = i8080_reg_code(token->slice, oprec.enc_t);
         if (register_c == -1) {
           diagnostics_add(source_file, (struct Diagnostic){"Expected a register", token->range});
           goto fail;
@@ -341,7 +336,7 @@ void parser_print_items(struct SourceFile *source_file) {
         break;
       case PARSED_LABEL:
         printf("LABEL:\n");
-        printf("      %s\n", p->label.text);
+        printf("      %.*s\n", (int)p->label.text.len, p->label.text.text);
         break;
       case PARSED_INSTR:
         printf("INSTR:\n");
@@ -351,7 +346,7 @@ void parser_print_items(struct SourceFile *source_file) {
         printf("      num : ");
         switch (p->instr.number.type) {
           case OP_LABEL:
-            printf("%s (unresolved)\n", p->instr.number.label);
+            printf("%.*s (unresolved)\n", (int)p->instr.number.label.len, p->instr.number.label.text);
             break;
           case OP_VALUE:
             printf("0x%x\n", (int)p->instr.number.value);

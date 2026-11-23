@@ -1,6 +1,7 @@
 #ifndef LABELS_H
 #define LABELS_H
 
+#include "util/slice.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
@@ -8,7 +9,7 @@
 struct SourceFile;
 
 struct Label {
-  char *text;
+  struct Slice text;
   uint16_t addr;
 };
 

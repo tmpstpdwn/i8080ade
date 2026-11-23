@@ -7,52 +7,24 @@
 #include <stdio.h>
 
 #include "util/vector.h"
+#include "util/slice.h"
 #include "lexer.h"
 #include "diagnostics.h"
 #include "assembler.h"
 
-// Returns a malloc'ed, null terminated string which must be free'd.
-static char *substr(const char *str, size_t from, size_t to) {
-  if (!str || from >= to) return NULL;
-
-  size_t str_len = strlen(str);
-
-  if (from >= str_len || to > str_len) return NULL;
-  
-  size_t substr_len = to - from;
-  char *substr = malloc(sizeof(char) * substr_len + 1);
-  if (!substr) return NULL;
-
-  for (size_t i = 0; i < substr_len; i++)
-    substr[i] = str[from + i];
-
-  substr[substr_len] = '\0';
-
-  return substr;
-}
-
 static bool add_token(struct SourceFile *source_file, enum TokenKind kind,
-                 size_t line, size_t from, size_t to) {
+                      size_t line, size_t from, size_t to) {
+  if (from > to) return false;
+
   struct SourceRange range = {line, from, to};
-  char *str = NULL;
+  struct Slice slice = {source_file->text + from, to - from};
 
-  if (kind != TK_NEWLINE) {
-    str = substr(source_file->text, from, to);
-    if (!str) return false;
-  }
-
-  if (kind == TK_INVALID) {
+  if (kind == TK_INVALID)
     diagnostics_add(source_file, (struct Diagnostic){"Unrecognised token", range});
-  }
 
-  struct Token token = (struct Token){kind, str, range};
+  struct Token token = {kind, slice, range};
 
-  if (!vector_append(source_file->tokens, &token)) {
-    free(str);
-    return false;
-  }
-
-  return true;
+  return vector_append(source_file->tokens, &token);
 }
 
 bool lexer_tokenize(struct SourceFile *source_file) {
@@ -133,25 +105,28 @@ struct Token *lexer_peek_token(struct SourceFile *source_file, size_t n) {
 
 void lexer_print_tokens(struct SourceFile *source_file) {
   for (size_t i = 0; i < vector_len(source_file->tokens); i++) {
-    struct Token *token = vector_get_elem(source_file->tokens, i);
+    const struct Token *token = vector_get_elem(source_file->tokens, i);
+    int len = (int)token->slice.len;
+    const char *text = token->slice.text;
+
     switch (token->kind) {
       case TK_IDENT:
-        printf("IDENT: %s\n", token->text);
+        printf("IDENT: %.*s\n", len, text);
         break;
       case TK_NONE:
         printf("NONE\n");
         break;
       case TK_INVALID:
-        printf("INVALID: %s\n", token->text);
+        printf("INVALID: %.*s\n", len, text);
         break;
       case TK_PUNCT:
-        printf("PUNCT %s\n", token->text);
+        printf("PUNCT: %.*s\n", len, text);
         break;
       case TK_NEWLINE:
         printf("NEWLINE\n");
         break;
       case TK_NUM:
-        printf("NUM: %s\n", token->text);
+        printf("NUM: %.*s\n", len, text);
         break;
     }
   }

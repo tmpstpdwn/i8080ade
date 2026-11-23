@@ -5,6 +5,8 @@
 #include <stddef.h>
 #include <stdbool.h>
 
+#include "util/slice.h"
+
 struct SourceFile;
 
 enum TokenKind {
@@ -24,7 +26,7 @@ struct SourceRange {
 
 struct Token {
   enum TokenKind kind;
-  char *text;
+  struct Slice slice;
   struct SourceRange range;
 };
 

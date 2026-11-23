@@ -5,6 +5,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include "util/slice.h"
+
 enum EncType {
   ENC_NONE,
   ENC_FIXED,
@@ -27,8 +29,8 @@ struct OpcodeRec {
   uint8_t opcode;
 };
 
-bool opcode_rec_get(const char *mnemonic, struct OpcodeRec *oprec);
-int opcode_reg_code(const char *reg, enum EncType enc_t);
-uint8_t opcode_instr_size(enum EncType enc_t);
+bool i8080_opcode_rec(struct Slice mnemonic, struct OpcodeRec *oprec);
+int i8080_reg_code(struct Slice reg, enum EncType enc_t);
+uint8_t i8080_instr_size(enum EncType enc_t);
 
 #endif

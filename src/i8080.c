@@ -4,7 +4,8 @@
 #include <string.h>
 #include <ctype.h>
 
-#include "opcode.h"
+#include "util/slice.h"
+#include "i8080.h"
 
 static const struct OpcodeRec opcode_rec[] = {
   {"NOP",       ENC_FIXED,                  0x00},
@@ -88,22 +89,12 @@ static const struct OpcodeRec opcode_rec[] = {
   {NULL,        ENC_NONE,                   0x00}
 };
 
-bool opcode_rec_get(const char *mnemonic, struct OpcodeRec *oprec) {
-  if (!mnemonic) return false;
-
-  int mnemonic_len = strlen(mnemonic);
-  if (mnemonic_len == 0 || mnemonic_len > 4) return false;
-
-  char mnemonic_upper[5] = {0};
-  int i = 0;
-  while (mnemonic[i] && i < 4) {
-    mnemonic_upper[i] = toupper(mnemonic[i]);    
-    i++;
-  }
-  mnemonic_upper[i] = '\0';
+bool i8080_opcode_rec(struct Slice mnemonic, struct OpcodeRec *oprec) {
+  if (!oprec || !mnemonic.text || mnemonic.len == 0 || mnemonic.len > 4)
+    return false;
 
   for (int i = 0; opcode_rec[i].name != NULL; i++) {
-    if (strcmp(mnemonic_upper, opcode_rec[i].name) == 0) {
+    if (slice_eq_nocase(mnemonic, opcode_rec[i].name)) {
       *oprec = opcode_rec[i];
       return true;
     }
@@ -112,40 +103,20 @@ bool opcode_rec_get(const char *mnemonic, struct OpcodeRec *oprec) {
   return false;
 }
 
-int opcode_reg_code(const char *reg, enum EncType enc_t) {
-  if (!reg) return -1;
-
-  int reg_len = strlen(reg);
-  if (reg_len == 0 || reg_len > 3) return -1;
-
-  char reg_upper[4] = {0};
-  int i = 0;
-  while (reg[i] && i < 3) {
-    reg_upper[i] = toupper(reg[i]);
-    i++;
-  }
-  reg_upper[i] = '\0';
+int i8080_reg_code(struct Slice reg, enum EncType enc_t) {
+  if (!reg.text || reg.len == 0 || reg.len > 3) return -1;
 
   int n = -1;
-
-  if (reg_len == 1) {
-    switch (reg_upper[0]) {
-      case 'B':
-        n = 0; break;
-      case 'C':
-        n = 1; break;
-      case 'D':
-        n = 2; break;
-      case 'E':
-        n = 3; break;
-      case 'H':
-        n = 4; break;
-      case 'L':
-        n = 5; break;
-      case 'M':
-        n = 6; break;
-      case 'A':
-        n = 7; break;
+  if (reg.len == 1) {
+    switch (toupper((unsigned char)reg.text[0])) {
+      case 'B': n = 0; break;
+      case 'C': n = 1; break;
+      case 'D': n = 2; break;
+      case 'E': n = 3; break;
+      case 'H': n = 4; break;
+      case 'L': n = 5; break;
+      case 'M': n = 6; break;
+      case 'A': n = 7; break;
       default: break;
     }
   }
@@ -155,24 +126,20 @@ int opcode_reg_code(const char *reg, enum EncType enc_t) {
     case ENC_REG_ID:
     case ENC_REG_ARITH:
     case ENC_REG_IMM8:
-        return n;
+      return n;
 
-    case ENC_REG_PAIR_BD: {
-        if (n >= 0 && n <= 2 && n % 2 == 0)
-          return n / 2;
-        return -1;
-    }
+    case ENC_REG_PAIR_BD:
+      if (n >= 0 && n <= 2 && n % 2 == 0)
+        return n / 2;
+      return -1;
 
     case ENC_REG_PAIR_SP:
     case ENC_REG_PAIR_SP_IMM16:
     case ENC_REG_PAIR_PSW: {
-        if (n >= 0 && n <= 4 && n % 2 == 0) {
-          return n / 2;
-        } else {
-          char *s = (enc_t == ENC_REG_PAIR_PSW)? "PSW": "SP";
-          if (strcmp(reg_upper, s) == 0) return 3;
-        }
-        return -1;
+      if (n >= 0 && n <= 4 && n % 2 == 0)
+        return n / 2;
+      const char *special = (enc_t == ENC_REG_PAIR_PSW) ? "PSW" : "SP";
+      return slice_eq_nocase(reg, special) ? 3 : -1;
     }
 
     default:
@@ -180,7 +147,7 @@ int opcode_reg_code(const char *reg, enum EncType enc_t) {
   }
 }
 
-uint8_t opcode_instr_size(enum EncType enc_t) {
+uint8_t i8080_instr_size(enum EncType enc_t) {
   uint8_t size = 0;
   switch (enc_t) {
     case ENC_NONE:

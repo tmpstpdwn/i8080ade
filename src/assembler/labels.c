@@ -4,7 +4,7 @@
 #include <stddef.h>
 
 #include "util/vector.h"
-#include "opcode.h"
+#include "i8080.h"
 #include "lexer.h"
 #include "diagnostics.h"
 #include "parser.h"
@@ -16,14 +16,15 @@ static bool labels_add(struct SourceFile *source_file, struct Label label) {
   return vector_append(source_file->labels, &label);
 }
 
-static bool labels_resolve(struct SourceFile *source_file, const char *text, uint16_t *resolved_val) {
-  if (!text || !resolved_val) return false;
+static bool labels_resolve(struct SourceFile *source_file, struct Slice name,
+                           uint16_t *resolved_val) {
+  if (!source_file || !resolved_val || !name.text) return false;
 
   size_t label_table_len = vector_len(source_file->labels);
 
   for (size_t i = 0; i < label_table_len; i++) {
-    struct Label *label = vector_get_elem(source_file->labels, i);
-    if (strcmp(label->text, text) == 0) {
+    const struct Label *label = vector_get_elem(source_file->labels, i);
+    if (slice_eq(label->text, name)) {
       *resolved_val = label->addr;
       return true;
     }
@@ -50,7 +51,7 @@ void labels_build_table(struct SourceFile *source_file) {
         }
         break;
       case PARSED_INSTR:
-        address_counter += opcode_instr_size(p->instr.enc_t);
+        address_counter += i8080_instr_size(p->instr.enc_t);
         break;
     }
   }

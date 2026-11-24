@@ -2,6 +2,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <string.h>
+#include <stdarg.h>
 
 #include "util/slice.h"
 #include "util/vector.h"
@@ -12,58 +13,95 @@
 #define RED   "\033[31m"
 #define RESET "\033[0m"
 
-static const char *const diag_fmt[DIAG_COUNT] = {
-#define X(id, fmt) [DIAG_##id] = fmt,
-  DIAG_LIST(X)
-#undef X
-};
-
-bool diagnostics_add(struct SourceFile *source_file, enum DiagId id, struct SourceRange range, struct DiagArgs args) {
-  if (!source_file) return false;
-
-  struct Diagnostic diagnostic = {id, range, args};
-
+static bool diagnostic_insert(struct SourceFile *source_file, const struct Diagnostic *diagnostic) {
   size_t d_sz = vector_len(source_file->diagnostics);
   size_t i = 0;
 
   while (i < d_sz) {
     struct Diagnostic *d = vector_get_elem(source_file->diagnostics, i);
-    if (d->range.lineno == diagnostic.range.lineno) {
-      if (d->range.start_offset > diagnostic.range.start_offset) {
+    if (d->range.lineno == diagnostic->range.lineno) {
+      if (d->range.start_offset > diagnostic->range.start_offset) {
         break;
       }
-    } else if (d->range.lineno > diagnostic.range.lineno) {
+    } else if (d->range.lineno > diagnostic->range.lineno) {
       break;
     }
     i++;
   }
 
-  return vector_insert(source_file->diagnostics, i, &diagnostic);
+  return vector_insert(source_file->diagnostics, i, diagnostic);
 }
 
-static bool is_placeholder(const char **p, const char *placeholder) {
-  size_t n = strlen(placeholder);
-  if (strncmp(*p, placeholder, n) != 0) return false;
-  *p += n;
-  return true;
-}
+bool diagnostics_add(struct SourceFile *source_file, struct SourceRange range, const char *fmt, ...) {
+  if (!source_file || !fmt) return false;
 
-static void fprint_diag(FILE *out, const struct Diagnostic *d) {
-  const struct DiagArgs *a = &d->args;
+  struct Diagnostic diagnostic = {
+    .range = range,
+    .fmt = fmt,
+    .arg_count = 0,
+  };
 
-  for (const char *p = diag_fmt[d->id]; *p; ) {
-    if (*p != '{') { fputc(*p++, out); continue; }
-    if (is_placeholder(&p, "{name}")) {
-      slice_print(out, a->name);
-    } else if (is_placeholder(&p, "{num}")) {
-      fprintf(out, "%llu", (unsigned long long)a->num);
-    } else if (is_placeholder(&p, "{bits}")) {
-      fprintf(out, "%llu", (unsigned long long)a->bits);
-    } else {
-      fputc(*p++, out);
+  va_list ap;
+  va_start(ap, fmt);
+
+  for (const char *p = fmt; *p; p++) {
+    if (*p == '%' && *(p + 1)) {
+      p++;
+      if (*p == 's') {
+        if (diagnostic.arg_count < DIAG_MAX_ARGS) {
+          diagnostic.args[diagnostic.arg_count++] = (struct DiagArg){
+            .kind = ARG_SLICE,
+            .slice = va_arg(ap, struct Slice),
+          };
+        }
+      } else if (*p == 'n') {
+        if (diagnostic.arg_count < DIAG_MAX_ARGS) {
+          diagnostic.args[diagnostic.arg_count++] = (struct DiagArg){
+            .kind = ARG_NUM,
+            .num = va_arg(ap, uint64_t),
+          };
+        }
+      } else if (*p == '%') {
+        // escaped %%
+      }
     }
   }
 
+  va_end(ap);
+
+  return diagnostic_insert(source_file, &diagnostic);
+}
+
+static void fprint_diag(FILE *out, const struct Diagnostic *d) {
+  size_t arg_idx = 0;
+
+  for (const char *p = d->fmt; *p; ) {
+    if (*p != '%') {
+      fputc(*p++, out);
+      continue;
+    }
+
+    p++; // skip '%'
+    if (*p == 's') {
+      if (arg_idx < d->arg_count && d->args[arg_idx].kind == ARG_SLICE) {
+        slice_print(out, d->args[arg_idx].slice);
+        arg_idx++;
+      }
+      p++;
+    } else if (*p == 'n') {
+      if (arg_idx < d->arg_count && d->args[arg_idx].kind == ARG_NUM) {
+        fprintf(out, "%llu", (unsigned long long)d->args[arg_idx].num);
+        arg_idx++;
+      }
+      p++;
+    } else if (*p == '%') {
+      fputc('%', out);
+      p++;
+    } else {
+      fputc('%', out);
+      if (*p) fputc(*p++, out);
+    }
+  }
 }
 
 void diagnostics_print(struct SourceFile *source_file) {

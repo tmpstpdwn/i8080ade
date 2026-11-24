@@ -7,52 +7,31 @@
 
 #include "lexer.h"
 #include "util/slice.h"
-
 #include "source.h"
 
-#define DIAG_LIST(X) \
-  /* ---- lexer ---- */ \
-  X(LEX_UNRECOGNISED,      "unrecognised character '{name}'") \
-  /* ---- labels ---- */ \
-  X(LABEL_DUPLICATE,       "label '{name}' is already defined") \
-  X(LABEL_UNDEFINED,       "undefined label '{name}'") \
-  X(LABEL_IS_MNEMONIC,     "'{name}' is an instruction mnemonic and can't be used as a label") \
-  X(LABEL_IS_REGISTER,     "'{name}' is a register name and can't be used as a label") \
-  X(LABEL_BAD_NAME,        "'{name}' is not a valid label name: labels must start with a letter or '_'") \
-  /* ---- parser ---- */ \
-  X(EXPECTED_MNEMONIC,     "expected an instruction mnemonic, found '{name}'") \
-  X(INCOMPLETE_INSTR,      "incomplete instruction, expected more operands") \
-  X(EXPECTED_COMMA,        "expected ',' between operands, found '{name}'") \
-  X(BAD_NUMBER,            "malformed number literal '{name}'") \
-  X(EXPECTED_NUM,          "expected a number, found '{name}'") \
-  X(EXPECTED_NUM_OR_LABEL, "expected a number or a label, found '{name}'") \
-  X(EXPECTED_REGISTER,     "expected a register, found '{name}'") \
-  X(TRAILING_TOKENS,       "unexpected '{name}' after the end of the instruction") \
-  /* ---- validation ---- */ \
-  X(MOV_M_M,               "'MOV M, M' is not a valid instruction (that encoding is HLT)") \
-  X(VALUE_RANGE,           "{num} does not fit in {bits} bits (maximum {bits})") \
-  X(ADDR_OVERFLOW,         "program exceeds 64KB address space (at byte {num})")
-
-enum DiagId {
-#define X(id, fmt) DIAG_##id,
-  DIAG_LIST(X)
-#undef X
-  DIAG_COUNT
+enum DiagArgKind {
+  ARG_SLICE,
+  ARG_NUM,
 };
 
-struct DiagArgs {
-  struct Slice name;
-  uint64_t num;
-  uint64_t bits;
+struct DiagArg {
+  enum DiagArgKind kind;
+  union {
+    struct Slice slice;
+    uint64_t num;
+  };
 };
+
+#define DIAG_MAX_ARGS 4
 
 struct Diagnostic {
-  enum DiagId id;
   struct SourceRange range;
-  struct DiagArgs args;
+  const char *fmt;
+  uint8_t arg_count;
+  struct DiagArg args[DIAG_MAX_ARGS];
 };
 
-bool diagnostics_add(struct SourceFile *source_file, enum DiagId id, struct SourceRange range, struct DiagArgs args);
+bool diagnostics_add(struct SourceFile *source_file, struct SourceRange range, const char *fmt, ...);
 void diagnostics_print(struct SourceFile *source_file);
 
 #endif

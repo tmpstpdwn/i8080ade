@@ -6,7 +6,6 @@
 #include "lexer.h"
 #include "diagnostics.h"
 #include "parser.h"
-#include "assembler.h"
 
 enum InstrGrammarElem {
   IGE_OPCODE,
@@ -135,17 +134,17 @@ static int parse_label(struct SourceFile *source_file) {
   if (second_token->kind == TK_PUNCT && punct == ':') {
     if (first_token->kind == TK_IDENT) {
       if (is_mnemonic(first_token->slice)) {
-        diagnostics_add(source_file, (struct Diagnostic){"Instruction mnemonic can't be used as a label", first_token->range});
+        diagnostics_add(source_file, DIAG_LABEL_IS_MNEMONIC, first_token->range, (struct DiagArgs){.name = first_token->slice});
       }
       else if (is_reg(first_token->slice)) {
-        diagnostics_add(source_file, (struct Diagnostic){"Register name can't be used as a label", first_token->range});
+        diagnostics_add(source_file, DIAG_LABEL_IS_REGISTER, first_token->range, (struct DiagArgs){.name = first_token->slice});
       }
       else {
         struct ParsedLabel label = {first_token->slice, first_token->range};
         add_parsed_item(source_file, (struct ParsedItem){.type = PARSED_LABEL, .label = label});
       }
     } else {
-      diagnostics_add(source_file, (struct Diagnostic){"Expected a valid label identifier", first_token->range});
+      diagnostics_add(source_file, DIAG_LABEL_BAD_NAME, first_token->range, (struct DiagArgs){.name = first_token->slice});
     }
     lexer_consume_token(source_file, 2);
 
@@ -178,7 +177,7 @@ static void parse_instr(struct SourceFile *source_file) {
         if (!grammar) goto fail;
         grammar_arr = grammar->arr;
       } else {
-        diagnostics_add(source_file, (struct Diagnostic){"Expected a valid opcode mnemonic", token->range});
+        diagnostics_add(source_file, DIAG_EXPECTED_MNEMONIC, token->range, (struct DiagArgs){.name = token->slice});
         goto fail;
       }
     }
@@ -189,7 +188,7 @@ static void parse_instr(struct SourceFile *source_file) {
       struct LineOffset *lo = vector_get_elem(source_file->line_offsets, token->range.lineno);
       struct SourceRange range = {0};
       if (lo) range = (struct SourceRange){token->range.lineno, lo->offset, lo->offset + lo->len};
-      diagnostics_add(source_file, (struct Diagnostic){"Incomplete instruction, expected more operands", range});
+      diagnostics_add(source_file, DIAG_INCOMPLETE_INSTR, range, (struct DiagArgs){0});
       goto fail;
     }
 
@@ -197,11 +196,12 @@ static void parse_instr(struct SourceFile *source_file) {
       case IGE_OPCODE:
         parsed_instr.enc_t = oprec.enc_t;
         parsed_instr.opcode = oprec.opcode;
+        parsed_instr.range = token->range;
         break;
 
       case IGE_COMMA:
         if (token->kind != TK_PUNCT || token->slice.text[0] != ',') {
-          diagnostics_add(source_file, (struct Diagnostic){"Expected \',\' between operands", token->range});
+          diagnostics_add(source_file, DIAG_EXPECTED_COMMA, token->range, (struct DiagArgs){.name = token->slice});
           goto fail;
         }
         break;
@@ -213,7 +213,7 @@ static void parse_instr(struct SourceFile *source_file) {
           if (parse_number(token->slice, &parsed_instr.number.value)) {
             parsed_instr.number.type = OP_VALUE;
           } else {
-            diagnostics_add(source_file, (struct Diagnostic){"Received a malformed number literal", token->range});
+            diagnostics_add(source_file, DIAG_BAD_NUMBER, token->range, (struct DiagArgs){.name = token->slice});
             goto fail;
           }
         } else {
@@ -222,11 +222,11 @@ static void parse_instr(struct SourceFile *source_file) {
               parsed_instr.number.type = OP_LABEL;
               parsed_instr.number.label = token->slice;
             } else {
-              diagnostics_add(source_file, (struct Diagnostic){"Expected a valid number literal or a label", token->range});
+              diagnostics_add(source_file, DIAG_EXPECTED_NUM_OR_LABEL, token->range, (struct DiagArgs){.name = token->slice});
               goto fail;
             }
           } else {
-            diagnostics_add(source_file, (struct Diagnostic){"Expected a valid number literal", token->range});
+            diagnostics_add(source_file, DIAG_EXPECTED_NUM, token->range, (struct DiagArgs){.name = token->slice});
             goto fail;
           }
         }
@@ -237,7 +237,7 @@ static void parse_instr(struct SourceFile *source_file) {
       case IGE_REG: {
         int register_c = i8080_reg_code(token->slice, oprec.enc_t);
         if (register_c == -1) {
-          diagnostics_add(source_file, (struct Diagnostic){"Expected a register", token->range});
+          diagnostics_add(source_file, DIAG_EXPECTED_REGISTER, token->range, (struct DiagArgs){.name = token->slice});
           goto fail;
         }
 
@@ -255,7 +255,7 @@ static void parse_instr(struct SourceFile *source_file) {
 
       case IGE_END:
         if (token->kind != TK_NEWLINE) {
-          diagnostics_add(source_file, (struct Diagnostic){"Unexpected trailing tokens", token->range});
+          diagnostics_add(source_file, DIAG_TRAILING_TOKENS, token->range, (struct DiagArgs){.name = token->slice});
           goto fail;
         }
         add_parsed_item(source_file, (struct ParsedItem){.type = PARSED_INSTR, .instr = parsed_instr});
@@ -295,25 +295,25 @@ void parser_validate(struct SourceFile *source_file) {
       case ENC_REG_REG:
         if (p->instr.reg1.value == 6 && p->instr.reg2.value == 6) {
           struct SourceRange range = {p->instr.reg1.range.lineno, p->instr.reg1.range.start_offset, p->instr.reg2.range.end_offset};
-          diagnostics_add(source_file, (struct Diagnostic){"Invalid Operands", range});
+          diagnostics_add(source_file, DIAG_MOV_M_M, range, (struct DiagArgs){0});
         }
         break;
       case ENC_ADDR16:
         if (p->instr.number.type == OP_VALUE && p->instr.number.value > 0xFFFF)
-          diagnostics_add(source_file, (struct Diagnostic){"Expected an address within the range 0x0000 - 0xFFFF (16-bit)", p->instr.number.range});
+          diagnostics_add(source_file, DIAG_VALUE_RANGE, p->instr.number.range, (struct DiagArgs){.num = p->instr.number.value, .bits = 16});
         break;
       case ENC_REG_PAIR_SP_IMM16:
         if (p->instr.number.value > 0xFFFF)
-          diagnostics_add(source_file, (struct Diagnostic){"Expected a value within the range 0x0000 - 0xFFFF (16-bit)", p->instr.number.range});
+          diagnostics_add(source_file, DIAG_VALUE_RANGE, p->instr.number.range, (struct DiagArgs){.num = p->instr.number.value, .bits = 16});
         break;
       case ENC_IMM8:
       case ENC_REG_IMM8:
         if (p->instr.number.value > 0xFF)
-          diagnostics_add(source_file, (struct Diagnostic){"Expected a value within the range 0x00 - 0xFF (8-bit)", p->instr.number.range});
+          diagnostics_add(source_file, DIAG_VALUE_RANGE, p->instr.number.range, (struct DiagArgs){.num = p->instr.number.value, .bits = 8});
         break;
       case ENC_RST:
         if (p->instr.number.value >= 8)
-          diagnostics_add(source_file, (struct Diagnostic){"Expected a value within the range 0x0 - 0x7 (3-bit)", p->instr.number.range});
+          diagnostics_add(source_file, DIAG_VALUE_RANGE, p->instr.number.range, (struct DiagArgs){.num = p->instr.number.value, .bits = 3});
         break;
       default: break;
     }

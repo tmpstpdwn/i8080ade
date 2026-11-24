@@ -21,7 +21,7 @@ static bool add_token(struct SourceFile *source_file, enum TokenKind kind,
   struct Slice slice = {source_file->text + from, to - from};
 
   if (kind == TK_INVALID)
-    diagnostics_add(source_file, (struct Diagnostic){"Unrecognised token", range});
+    diagnostics_add(source_file, DIAG_LEX_UNRECOGNISED, range, (struct DiagArgs){.name = slice});
 
   struct Token token = {kind, slice, range};
 

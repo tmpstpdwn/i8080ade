@@ -30,7 +30,8 @@
   X(TRAILING_TOKENS,       "unexpected '{name}' after the end of the instruction") \
   /* ---- validation ---- */ \
   X(MOV_M_M,               "'MOV M, M' is not a valid instruction (that encoding is HLT)") \
-  X(VALUE_RANGE,           "{num} does not fit in {bits} bits (maximum {bits})")
+  X(VALUE_RANGE,           "{num} does not fit in {bits} bits (maximum {bits})") \
+  X(ADDR_OVERFLOW,         "program exceeds 64KB address space (at byte {num})")
 
 enum DiagId {
 #define X(id, fmt) DIAG_##id,

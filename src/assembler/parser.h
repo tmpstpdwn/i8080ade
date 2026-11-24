@@ -39,6 +39,7 @@ struct ParsedLabel {
 struct ParsedInstr {
   enum EncType enc_t;
   uint8_t opcode;
+  struct SourceRange range;
   struct Operand reg1;
   struct Operand reg2;
   struct Operand number;

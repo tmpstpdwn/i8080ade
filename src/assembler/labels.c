@@ -33,7 +33,7 @@ static bool labels_resolve(struct SourceFile *source_file, struct Slice name,
 }
 
 void labels_build_table(struct SourceFile *source_file) {
-  uint16_t address_counter = 0;
+  uint32_t address_counter = 0;
 
   size_t parsed_items_len = vector_len(source_file->parsed_items);
   for (size_t i = 0; i < parsed_items_len; i++) {
@@ -44,13 +44,16 @@ void labels_build_table(struct SourceFile *source_file) {
         break;
       case PARSED_LABEL:
         if (labels_resolve(source_file, p->label.text, &dummy)) {
-          diagnostics_add(source_file, (struct Diagnostic){"Duplicate label", p->label.range});
+          diagnostics_add(source_file, DIAG_LABEL_DUPLICATE, p->label.range, (struct DiagArgs){.name = p->label.text});
         } else {
-          labels_add(source_file, (struct Label){p->label.text, address_counter});
+          labels_add(source_file, (struct Label){p->label.text, (uint16_t)address_counter});
         }
         break;
       case PARSED_INSTR:
         address_counter += i8080_instr_size(p->instr.enc_t);
+        if (address_counter > 0x10000) {
+          diagnostics_add(source_file, DIAG_ADDR_OVERFLOW, p->instr.range, (struct DiagArgs){.num = address_counter});
+        }
         break;
     }
   }
@@ -67,7 +70,7 @@ void labels_resolve_all(struct SourceFile *source_file) {
           p->instr.number.type = OP_VALUE;
           p->instr.number.value = resolved_val;
         } else {
-          diagnostics_add(source_file, (struct Diagnostic){"Undefined label", p->instr.number.range});
+          diagnostics_add(source_file, DIAG_LABEL_UNDEFINED, p->instr.number.range, (struct DiagArgs){.name = p->instr.number.label});
         }
       }
     }

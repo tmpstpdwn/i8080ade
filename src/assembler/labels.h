@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-struct SourceFile;
+#include "source.h"
 
 struct Label {
   struct Slice text;

@@ -2,6 +2,7 @@
 #include <stddef.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdio.h>
 
 #include "util/slice.h"
 
@@ -19,6 +20,13 @@ bool slice_eq_nocase(struct Slice s, const char *lit) {
     if (toupper((unsigned char)s.text[i]) != toupper((unsigned char)lit[i]))
       return false;
   return true;
+}
+
+void slice_print(FILE *out, struct Slice s) {
+  for (size_t i = 0; i < s.len; i++) {
+    unsigned char c = (unsigned char)s.text[i];
+    fputc(c, out);
+  }
 }
 
 bool slice_cpy(char *dst, size_t cap, struct Slice src) {

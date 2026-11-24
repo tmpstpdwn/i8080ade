@@ -9,7 +9,6 @@
 #include "diagnostics.h"
 #include "parser.h"
 #include "labels.h"
-#include "assembler.h"
 
 static bool labels_add(struct SourceFile *source_file, struct Label label) {
   if (!source_file) return false;

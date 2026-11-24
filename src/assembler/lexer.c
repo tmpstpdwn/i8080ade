@@ -10,7 +10,8 @@
 #include "util/slice.h"
 #include "lexer.h"
 #include "diagnostics.h"
-#include "assembler.h"
+
+#include "source.h"
 
 static bool add_token(struct SourceFile *source_file, enum TokenKind kind,
                       size_t line, size_t from, size_t to) {

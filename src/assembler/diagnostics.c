@@ -12,7 +12,23 @@
 
 bool diagnostics_add(struct SourceFile *source_file, struct Diagnostic diagnostic) {
   if (!source_file) return false;
-  return vector_append(source_file->diagnostics, &diagnostic);
+
+  size_t d_sz = vector_len(source_file->diagnostics);
+  size_t i = 0;
+
+  while (i < d_sz) {
+    struct Diagnostic *d = vector_get_elem(source_file->diagnostics, i);
+    if (d->range.lineno == diagnostic.range.lineno) {
+      if (d->range.start_offset > diagnostic.range.start_offset) {
+        break;
+      }
+    } else if (d->range.lineno > diagnostic.range.lineno) {
+      break;
+    }
+    i++;
+  }
+
+  return vector_insert(source_file->diagnostics, i, &diagnostic);
 }
 
 void diagnostics_print(struct SourceFile *source_file) {

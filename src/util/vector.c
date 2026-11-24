@@ -44,6 +44,39 @@ bool vector_append(struct Vector *v, const void *value) {
   return true;
 }
 
+bool vector_insert(struct Vector *v, size_t index, const void *value) {
+  if (!v || !value || index > v->len) return false;
+
+  if (v->len >= v->cap) {
+    size_t new_cap = (v->data == NULL) ? 8 : v->cap * 2;
+
+    void *tmp = realloc(v->data, v->element_sz * new_cap);
+    if (!tmp) return false;
+
+    v->data = tmp;
+    v->cap = new_cap;
+  }
+
+  uint8_t *data = (uint8_t *)v->data;
+
+  // Shift elements to the right.
+  memmove(
+    data + (index + 1) * v->element_sz,
+    data + index * v->element_sz,
+    (v->len - index) * v->element_sz
+  );
+
+  // Insert the new element.
+  memcpy(
+    data + index * v->element_sz,
+    value,
+    v->element_sz
+  );
+
+  v->len++;
+  return true;
+}
+
 void *vector_get_elem(struct Vector *v, size_t index) {
   if (!v || index >= v->len) return NULL;
   return ((uint8_t *)v->data + index * v->element_sz);

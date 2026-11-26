@@ -79,21 +79,23 @@ static bool disassemble_file(const char *in) {
   }
 
   fseek(fp, 0, SEEK_END);
-  int fsize = ftell(fp);
+  int sz = ftell(fp);
   rewind(fp);
 
-  if (fsize <= 0) {
+  if (sz <= 0) {
     printf("File size determination failed.\n");
     fclose(fp);
     return false;
   }
 
+  uint64_t fsize = (uint64_t)sz;
+
   uint8_t *rom_buff = NULL;
   size_t pc = 0;
 
-  rom_buff = malloc(fsize);
+  rom_buff = malloc(sz);
 
-  if (rom_buff == NULL || fread(rom_buff, 1, fsize, fp) != (uint64_t)fsize) {
+  if (rom_buff == NULL || fread(rom_buff, 1, fsize, fp) != fsize) {
     printf("Loading rom into to memory failed.\n");
     free(rom_buff);
     fclose(fp);
@@ -101,9 +103,14 @@ static bool disassemble_file(const char *in) {
   }
 
   // Disassembly of the entire rome.
-  while (pc < (uint64_t)fsize) {
-    size_t size = disassemble(rom_buff, pc);
-    pc += size;
+  while (pc < fsize) {
+    uint8_t instr[3] = {0};
+    instr[0] = rom_buff[pc];
+    if (pc + 1 < fsize) instr[1] = rom_buff[pc + 1];
+    if (pc + 2 < fsize) instr[2] = rom_buff[pc + 2];
+    struct DInstr d_instr = disassembler_decode(instr);
+    disassembler_print(d_instr);
+    pc += (d_instr.size == 0)? 1: d_instr.size;
   }
 
   free(rom_buff);

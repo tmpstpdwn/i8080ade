@@ -1,5 +1,5 @@
-#ifndef OPCODE_H
-#define OPCODE_H
+#ifndef I8080_H
+#define I8080_H
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -29,8 +29,11 @@ struct OpcodeRec {
   uint8_t opcode;
 };
 
+uint8_t i8080_instr_size(enum EncType enc_t);
+enum EncType i8080_opcode_enc(uint8_t opcode);
 bool i8080_opcode_rec(struct Slice mnemonic, struct OpcodeRec *oprec);
 int i8080_reg_code(struct Slice reg, enum EncType enc_t);
-uint8_t i8080_instr_size(enum EncType enc_t);
+const char *i8080_code_reg(uint8_t n, enum EncType type);
+const char *i8080_opcode_mnemonic(uint8_t opcode);
 
 #endif

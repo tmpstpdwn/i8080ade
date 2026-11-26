@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include "util/slice.h"
 #include "util/vector.h"
 #include "i8080.h"
 #include "lexer.h"
@@ -23,7 +24,7 @@ static bool labels_resolve(struct SourceFile *source_file, struct Slice name,
 
   for (size_t i = 0; i < label_table_len; i++) {
     const struct Label *label = vector_get_elem(source_file->labels, i);
-    if (slice_eq(label->text, name)) {
+    if (slice_eq(label->text, name, false)) {
       *resolved_val = label->addr;
       return true;
     }

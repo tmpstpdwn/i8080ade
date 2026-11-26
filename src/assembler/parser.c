@@ -179,6 +179,8 @@ static void parse_instr(struct SourceFile *source_file) {
     struct Token *token = lexer_peek_token(source_file, 1);
     if (!token) return;
 
+    if (token->kind == TK_INVALID) goto fail;
+
     if (grammar_arr == NULL) {
       if (token->kind == TK_IDENT && i8080_opcode_rec(token->slice, &oprec)) {
         const struct InstrGrammar *grammar = grammar_for(oprec.enc_t);

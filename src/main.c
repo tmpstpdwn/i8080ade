@@ -109,7 +109,10 @@ static bool disassemble_file(const char *in) {
     if (pc + 1 < fsize) instr[1] = rom_buff[pc + 1];
     if (pc + 2 < fsize) instr[2] = rom_buff[pc + 2];
     struct DInstr d_instr = disassembler_decode(instr);
-    disassembler_print(d_instr);
+    printf("0x%04lX : ", pc);
+    disassembler_printb(d_instr);
+    disassembler_printf(d_instr);
+    putchar('\n');
     pc += (d_instr.size == 0)? 1: d_instr.size;
   }
 
@@ -127,8 +130,8 @@ int main(int argc, char **argv) {
     return 0;
   }
 
-  if (!strcmp(opt, "-a") && argc == 4) return assemble_file(argv[2], argv[3]);
-  if (!strcmp(opt, "-d") && argc == 3) return disassemble_file(argv[2]);
+  if (!strcmp(opt, "-a") && argc == 4) return assemble_file(argv[2], argv[3]) ? 0 : 1;
+  if (!strcmp(opt, "-d") && argc == 3) return disassemble_file(argv[2]) ? 0 : 1;
 
   print_usage(stderr, argv[0]);
   return 1;

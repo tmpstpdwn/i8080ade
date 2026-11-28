@@ -1,8 +1,8 @@
 #ifndef ASSEMBLER_H
 #define ASSEMBLER_H
 
-#include "util/vector.h"
+#include <stdbool.h>
 
-struct Vector *assemble_source(const char *file_text, const char *file_name, struct Vector *buffer);
+bool assemble_file(const char *in, const char *out);
 
 #endif

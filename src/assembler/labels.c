@@ -3,13 +3,14 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#include "util/slice.h"
-#include "util/vector.h"
 #include "i8080.h"
 #include "lexer.h"
 #include "diagnostics.h"
 #include "parser.h"
 #include "labels.h"
+
+#include "util/slice.h"
+#include "util/vector.h"
 
 static bool labels_add(struct SourceFile *source_file, struct Label label) {
   if (!source_file) return false;

@@ -10,67 +10,7 @@
 #include "assembler.h"
 
 #include "util/vector.h"
-
-static uint32_t assemble_instr(struct ParsedInstr *parsed_instr) {
-  uint32_t asmbld_instr = 0;
-
-  enum EncType enc_t = parsed_instr->enc_t;
-  uint8_t opcode = parsed_instr->opcode;
-
-  uint8_t register1_c = parsed_instr->reg1.value;
-  uint8_t register2_c = parsed_instr->reg2.value;
-
-  uint16_t number = parsed_instr->number.value;
-
-  switch (enc_t) {
-    case ENC_NONE:
-      break;
-
-    case ENC_FIXED:
-      asmbld_instr = opcode;
-      break;
-
-    case ENC_REG_REG:
-      asmbld_instr = opcode | (register1_c << 3) | register2_c;
-      break;
-
-    case ENC_REG_ID:
-      asmbld_instr = opcode | (register1_c << 3);
-      break;
-
-    case ENC_REG_ARITH:
-      asmbld_instr = opcode | register1_c;
-      break;
-
-    case ENC_REG_PAIR_SP:
-    case ENC_REG_PAIR_BD:
-    case ENC_REG_PAIR_PSW:
-      asmbld_instr = opcode | (register1_c << 4);
-      break;
-
-    case ENC_REG_PAIR_SP_IMM16:
-      asmbld_instr = number << 8 | (opcode + (register1_c << 4));
-      break;
-
-    case ENC_REG_IMM8:
-      asmbld_instr = number << 8 | (opcode + (register1_c << 3));
-      break;
-
-    case ENC_IMM8:
-      asmbld_instr = number << 8 | opcode;
-      break;
-
-    case ENC_ADDR16:
-      asmbld_instr = number << 8 | opcode;
-      break;
-
-    case ENC_RST:
-      asmbld_instr = opcode | (number << 3);
-      break;
-  }
-
-  return asmbld_instr;
-}
+#include "util/file.h"
 
 static bool assemble(struct SourceFile *source_file, struct Vector *buffer) {
   if (!source_file || !buffer) return false;
@@ -81,7 +21,11 @@ static bool assemble(struct SourceFile *source_file, struct Vector *buffer) {
     switch (p->type) {
       case PARSED_INSTR: {
         uint8_t size = i8080_instr_size(p->instr.enc_t);
-        uint32_t assembled_instr = assemble_instr(&p->instr);
+        struct I8080Instr instr = {
+          p->instr.opcode, p->instr.enc_t, p->instr.reg1.value,
+          p->instr.reg2.value, p->instr.number.value, size
+        };
+        uint32_t assembled_instr = i8080_encode_instr(instr);
         while (size) {
           uint8_t b = assembled_instr & 0xFF; 
           if (!vector_append(buffer, &b)) return false;
@@ -95,11 +39,14 @@ static bool assemble(struct SourceFile *source_file, struct Vector *buffer) {
     }
 
   }
+
   return vector_len(buffer) > 0;
 }
 
-struct Vector *assemble_source(const char *file_text, const char *file_name, struct Vector *buffer) {
+static struct Vector *assemble_source(const char *file_text, const char *file_name, struct Vector *buffer) {
   if (!file_text || !file_name || !buffer) return NULL;
+
+  struct Vector *result = NULL;
 
   struct SourceFile *source_file = source_file_new(file_name, file_text);
   if (!source_file) return NULL;
@@ -109,15 +56,40 @@ struct Vector *assemble_source(const char *file_text, const char *file_name, str
   labels_build_table(source_file);
   labels_resolve_all(source_file);
   parser_validate(source_file);
-  diagnostics_print(source_file);
 
-  struct Vector *result = NULL;
-  if (vector_len(source_file->diagnostics) == 0) {
-    if (assemble(source_file, buffer)) {
-      result = buffer;
-    }
+  if (vector_len(source_file->diagnostics)) {
+    diagnostics_print(source_file);
+  } else if (assemble(source_file, buffer)) {
+    result = buffer;
   }
 
   source_file_free(source_file);
   return result;
+}
+
+bool assemble_file(const char *in, const char *out) {
+  char *text = file_read(in);
+  if (!text) {
+    fprintf(stderr, "Error: cannot read '%s'\n", in);
+    return false;
+  }
+
+  struct Vector *buf = vector_new(sizeof(uint8_t));
+  if (!buf) {
+    fprintf(stderr, "Error: out of memory\n");
+    free(text);
+    return false;
+  }
+
+  if (assemble_source(text, in, buf)) {
+    if (file_write(out, vector_get_data(buf), vector_len(buf))) {
+      printf("Written to %s\n", out);
+    } else {
+      fprintf(stderr, "Error: cannot write '%s'\n", out);
+    }
+  }
+
+  free(text);
+  vector_free(buf);
+  return true;
 }

@@ -161,12 +161,66 @@ enum EncType i8080_opcode_enc(uint8_t opcode) {
  return ENC_NONE;
 }
 
+const char *i8080_opcode_mnemonic(uint8_t opcode) {
+  if ((opcode & 0xC7) == 0x04) return "INR";
+  if ((opcode & 0xC7) == 0x05) return "DCR";
+  if ((opcode & 0xC7) == 0x06) return "MVI";
+  if ((opcode & 0xC0) == 0x40 && opcode != 0x76) return "MOV";
+  if (opcode == 0x76) return "HLT";
+  if ((opcode & 0xC0) == 0x80) return arith[(opcode >> 3) & 7];
+  if ((opcode & 0xCF) == 0x01) return "LXI";
+  if ((opcode & 0xCF) == 0x03) return "INX";
+  if ((opcode & 0xCF) == 0x0B) return "DCX";
+  if ((opcode & 0xCF) == 0x09) return "DAD";
+  if ((opcode & 0xEF) == 0x02) return "STAX";
+  if ((opcode & 0xEF) == 0x0A) return "LDAX";
+  if ((opcode & 0xCF) == 0xC5) return "PUSH";
+  if ((opcode & 0xCF) == 0xC1) return "POP";
+  if ((opcode & 0xC7) == 0xC7) return "RST";
+  if ((opcode & 0xC7) == 0xC6) return imm_arith[(opcode >> 3) & 7];
+  if ((opcode & 0xC7) == 0xC0) return ret_cc[(opcode >> 3) & 7];
+  if ((opcode & 0xC7) == 0xC2 || opcode == 0xC3)
+    return opcode == 0xC3 ? "JMP" : jmp_cc[(opcode >> 3) & 7];
+  if ((opcode & 0xC7) == 0xC4 || opcode == 0xCD)
+    return opcode == 0xCD ? "CALL" : call_cc[(opcode >> 3) & 7];
+
+  switch (opcode) {
+    case 0x22: return "SHLD";
+    case 0x2A: return "LHLD";
+    case 0x32: return "STA";
+    case 0x3A: return "LDA";
+  }
+
+  switch (opcode) {
+    case 0x00: return "NOP";
+    case 0x07: return "RLC";
+    case 0x0F: return "RRC";
+    case 0x17: return "RAL";
+    case 0x1F: return "RAR";
+    case 0x27: return "DAA";
+    case 0x2F: return "CMA";
+    case 0x37: return "STC";
+    case 0x3F: return "CMC";
+    case 0xC9: return "RET";
+    case 0xD3: return "OUT";
+    case 0xDB: return "IN";
+    case 0xE3: return "XTHL";
+    case 0xE9: return "PCHL";
+    case 0xEB: return "XCHG";
+    case 0xF3: return "DI";
+    case 0xF9: return "SPHL";
+    case 0xFB: return "EI";
+  }
+
+  return NULL;
+}
+
 bool i8080_opcode_rec(struct Slice mnemonic, struct OpcodeRec *oprec) {
   if (!oprec || !mnemonic.text || mnemonic.len == 0 || mnemonic.len > 4)
     return false;
 
-  for (int i = 0; opcode_rec[i].name != NULL; i++) {
-    struct Slice slice = slice_from(opcode_rec[i].name, 0, strlen(opcode_rec[i].name));
+  for (int i = 0; opcode_rec[i].mnemonic != NULL; i++) {
+    struct Slice slice = slice_from(opcode_rec[i].mnemonic, 0, strlen(opcode_rec[i].mnemonic));
     if (slice_eq(mnemonic, slice, true)) {
       *oprec = opcode_rec[i];
       return true;
@@ -174,6 +228,131 @@ bool i8080_opcode_rec(struct Slice mnemonic, struct OpcodeRec *oprec) {
   }
 
   return false;
+}
+
+uint32_t i8080_encode_instr(struct I8080Instr instr) {
+  uint32_t asmbld_instr = 0;
+
+  enum EncType enc_t = instr.enc_t;
+  uint8_t opcode = instr.opcode;
+
+  uint8_t reg_1 = instr.reg_1;
+  uint8_t reg_2 = instr.reg_2;
+
+  uint16_t num = instr.num;
+
+  switch (enc_t) {
+    case ENC_NONE:
+      break;
+
+    case ENC_FIXED:
+      asmbld_instr = opcode;
+      break;
+
+    case ENC_REG_REG:
+      asmbld_instr = opcode | (reg_1 << 3) | reg_2;
+      break;
+
+    case ENC_REG_ID:
+      asmbld_instr = opcode | (reg_1 << 3);
+      break;
+
+    case ENC_REG_ARITH:
+      asmbld_instr = opcode | reg_1;
+      break;
+
+    case ENC_REG_PAIR_SP:
+    case ENC_REG_PAIR_BD:
+    case ENC_REG_PAIR_PSW:
+      asmbld_instr = opcode | (reg_1 << 4);
+      break;
+
+    case ENC_REG_PAIR_SP_IMM16:
+      asmbld_instr = num << 8 | (opcode + (reg_1 << 4));
+      break;
+
+    case ENC_REG_IMM8:
+      asmbld_instr = num << 8 | (opcode + (reg_1 << 3));
+      break;
+
+    case ENC_IMM8:
+      asmbld_instr = num << 8 | opcode;
+      break;
+
+    case ENC_ADDR16:
+      asmbld_instr = num << 8 | opcode;
+      break;
+
+    case ENC_RST:
+      asmbld_instr = opcode | (num << 3);
+      break;
+  }
+
+  return asmbld_instr;
+}
+
+struct I8080Instr i8080_decode_instr(const uint8_t instr_bytes[3]) {
+  uint8_t opcode = instr_bytes[0];
+  enum EncType enc_t = i8080_opcode_enc(opcode);
+
+  struct I8080Instr instr = {0};
+  instr.opcode = opcode;
+
+  if (enc_t == ENC_NONE) {
+    instr.enc_t = ENC_NONE;
+    instr.size = 1;
+    return instr;
+  }
+
+  int reg_1, reg_2, num;
+  reg_1 = reg_2 = num = -1;
+
+  switch (enc_t) {
+    case ENC_NONE:
+    case ENC_FIXED:
+      break;
+    case ENC_REG_PAIR_SP_IMM16:
+      reg_1 = (opcode >> 4) & 0x03;
+      /* Falls through */
+    case ENC_ADDR16:
+      num = instr_bytes[2] << 8 | instr_bytes[1];
+      break;
+    case ENC_REG_REG:
+      reg_1 = (opcode >> 3) & 0x07;
+      reg_2 = opcode & 0x07;
+      break;
+    case ENC_REG_ID:
+      reg_1 = (opcode >> 3) & 0x07;      
+      break;
+    case ENC_REG_ARITH:
+      reg_1 = opcode & 0x07;      
+      break;
+    case ENC_REG_PAIR_SP:
+    case ENC_REG_PAIR_BD:
+    case ENC_REG_PAIR_PSW:
+      reg_1 = (opcode >> 4) & 0x03;
+      break;
+    case ENC_REG_IMM8:
+      reg_1 = (opcode >> 3) & 0x07;
+      num = instr_bytes[1];
+      break;
+    case ENC_IMM8:
+      num = instr_bytes[1];
+      break;
+    case ENC_RST:
+      num = (opcode >> 3) & 0x07;
+      break;
+    default:
+      break;
+  }
+
+  instr.enc_t = enc_t;
+  instr.reg_1 = reg_1;
+  instr.reg_2 = reg_2;
+  instr.num = num;
+  instr.size = i8080_instr_size(enc_t);
+
+  return instr;
 }
 
 int i8080_reg_code(struct Slice reg, enum EncType enc_t) {
@@ -240,56 +419,75 @@ const char *i8080_code_reg(uint8_t n, enum EncType type) {
   }
 }
 
-const char *i8080_opcode_mnemonic(uint8_t opcode) {
-  if ((opcode & 0xC7) == 0x04) return "INR";
-  if ((opcode & 0xC7) == 0x05) return "DCR";
-  if ((opcode & 0xC7) == 0x06) return "MVI";
-  if ((opcode & 0xC0) == 0x40 && opcode != 0x76) return "MOV";
-  if (opcode == 0x76) return "HLT";
-  if ((opcode & 0xC0) == 0x80) return arith[(opcode >> 3) & 7];
-  if ((opcode & 0xCF) == 0x01) return "LXI";
-  if ((opcode & 0xCF) == 0x03) return "INX";
-  if ((opcode & 0xCF) == 0x0B) return "DCX";
-  if ((opcode & 0xCF) == 0x09) return "DAD";
-  if ((opcode & 0xEF) == 0x02) return "STAX";
-  if ((opcode & 0xEF) == 0x0A) return "LDAX";
-  if ((opcode & 0xCF) == 0xC5) return "PUSH";
-  if ((opcode & 0xCF) == 0xC1) return "POP";
-  if ((opcode & 0xC7) == 0xC7) return "RST";
-  if ((opcode & 0xC7) == 0xC6) return imm_arith[(opcode >> 3) & 7];
-  if ((opcode & 0xC7) == 0xC0) return ret_cc[(opcode >> 3) & 7];
-  if ((opcode & 0xC7) == 0xC2 || opcode == 0xC3)
-    return opcode == 0xC3 ? "JMP" : jmp_cc[(opcode >> 3) & 7];
-  if ((opcode & 0xC7) == 0xC4 || opcode == 0xCD)
-    return opcode == 0xCD ? "CALL" : call_cc[(opcode >> 3) & 7];
+// Print bytes.
+void i8080_printb_instr(struct I8080Instr instr) {
+  if (instr.size == 1) {
+    printf("%02X      ", instr.opcode);
+  } else if (instr.size == 2) {
+    printf("%02X %02X   ", instr.opcode, instr.num);
+  } else if (instr.size == 3) {
+    printf("%02X %02X %02X",
+        instr.opcode,
+        instr.num & 0xFF, // First byte in memory
+        (instr.num >> 8) & 0xFF // Second byte in memory
+    );
+  }
+  printf(" : ");
+}
 
-  switch (opcode) {
-    case 0x22: return "SHLD";
-    case 0x2A: return "LHLD";
-    case 0x32: return "STA";
-    case 0x3A: return "LDA";
+// Print formatted.
+void i8080_printf_instr(struct I8080Instr instr) {
+  if (instr.enc_t == ENC_NONE) {
+    printf("NONE");
+    return;
   }
 
-  switch (opcode) {
-    case 0x00: return "NOP";
-    case 0x07: return "RLC";
-    case 0x0F: return "RRC";
-    case 0x17: return "RAL";
-    case 0x1F: return "RAR";
-    case 0x27: return "DAA";
-    case 0x2F: return "CMA";
-    case 0x37: return "STC";
-    case 0x3F: return "CMC";
-    case 0xC9: return "RET";
-    case 0xD3: return "OUT";
-    case 0xDB: return "IN";
-    case 0xE3: return "XTHL";
-    case 0xE9: return "PCHL";
-    case 0xEB: return "XCHG";
-    case 0xF3: return "DI";
-    case 0xF9: return "SPHL";
-    case 0xFB: return "EI";
+  const char *mnemonic = i8080_opcode_mnemonic(instr.opcode);
+  if (!mnemonic) {
+    printf("DB 0x%02X", instr.opcode);
+    return;
   }
 
-  return NULL;
+  const char *r1 = i8080_code_reg(instr.reg_1, instr.enc_t);
+  const char *r2 = i8080_code_reg(instr.reg_2, instr.enc_t);
+
+  printf("%s", mnemonic);
+
+  switch (instr.enc_t) {
+    case ENC_NONE:
+    case ENC_FIXED:
+      break;
+
+    case ENC_REG_REG:
+      printf(" %s, %s", r1, r2);
+      break;
+
+    case ENC_REG_ID:
+    case ENC_REG_ARITH:
+    case ENC_REG_PAIR_SP:
+    case ENC_REG_PAIR_BD:
+    case ENC_REG_PAIR_PSW:
+      printf(" %s", r1);
+      break;
+
+    case ENC_REG_PAIR_SP_IMM16:
+      printf(" %s, 0x%04X", r1, instr.num);
+      break;
+
+    case ENC_REG_IMM8:
+      printf(" %s, 0x%02X", r1, instr.num);
+      break;
+
+    case ENC_IMM8:
+      printf(" 0x%02X", instr.num);
+      break;
+
+    case ENC_ADDR16:
+      printf(" 0x%04X", instr.num);
+      break;
+
+    case ENC_RST:
+      printf(" %u", instr.num);
+      break;
+  }
 }

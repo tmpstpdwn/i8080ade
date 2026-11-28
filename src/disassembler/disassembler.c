@@ -1,146 +1,58 @@
-#include <stdint.h>
-#include <stddef.h>
 #include <stdio.h>
 #include <stdbool.h>
+#include <stdlib.h>
 
 #include "i8080.h"
 #include "disassembler.h"
 
-struct DInstr disassembler_decode(const uint8_t instr[3]) {
-  uint8_t opcode = instr[0];
-  enum EncType enc_t = i8080_opcode_enc(opcode);
+bool disassemble_file(const char *in) {
+  FILE *fp = fopen(in, "rb");
 
-  struct DInstr d_instr = {0};
-  d_instr.opcode = opcode;
-  d_instr.reg_1 = REG_NONE;
-  d_instr.reg_2 = REG_NONE;
-
-  if (enc_t == ENC_NONE) {
-    d_instr.type = ENC_NONE;
-    d_instr.size = 1;
-    return d_instr;
+  if (!fp) {
+    printf("Opening file \'%s\' failed.\n", in);
+    return false;
   }
 
-  int reg_1, reg_2, num;
-  reg_1 = reg_2 = num = -1;
+  fseek(fp, 0, SEEK_END);
+  int sz = ftell(fp);
+  rewind(fp);
 
-  switch (enc_t) {
-    case ENC_NONE:
-    case ENC_FIXED:
-      break;
-    case ENC_REG_PAIR_SP_IMM16:
-      reg_1 = (opcode >> 4) & 0x03;
-      /* Falls through */
-    case ENC_ADDR16:
-      num = instr[2] << 8 | instr[1];
-      break;
-    case ENC_REG_REG:
-      reg_1 = (opcode >> 3) & 0x07;
-      reg_2 = opcode & 0x07;
-      break;
-    case ENC_REG_ID:
-      reg_1 = (opcode >> 3) & 0x07;      
-      break;
-    case ENC_REG_ARITH:
-      reg_1 = opcode & 0x07;      
-      break;
-    case ENC_REG_PAIR_SP:
-    case ENC_REG_PAIR_BD:
-    case ENC_REG_PAIR_PSW:
-      reg_1 = (opcode >> 4) & 0x03;
-      break;
-    case ENC_REG_IMM8:
-      reg_1 = (opcode >> 3) & 0x07;
-      num = instr[1];
-      break;
-    case ENC_IMM8:
-      num = instr[1];
-      break;
-    case ENC_RST:
-      num = (opcode >> 3) & 0x07;
-      break;
-    default:
-      break;
+  if (sz <= 0) {
+    printf("File size determination failed.\n");
+    fclose(fp);
+    return false;
   }
 
-  d_instr.type = enc_t;
-  d_instr.reg_1 = (reg_1 >= 0) ? (int8_t)reg_1 : REG_NONE;
-  d_instr.reg_2 = (reg_2 >= 0) ? (int8_t)reg_2 : REG_NONE;
-  d_instr.num = (num >= 0) ? (uint16_t)num : 0;
-  d_instr.size = i8080_instr_size(enc_t);
+  uint64_t fsize = (uint64_t)sz;
 
-  return d_instr;
-}
+  uint8_t *rom_buff = NULL;
+  size_t pc = 0;
 
-// Print bytes.
-void disassembler_printb(struct DInstr d_instr) {
-  if (d_instr.size == 1) {
-    printf("%02X      ", d_instr.opcode);
-  } else if (d_instr.size == 2) {
-    printf("%02X %02X   ", d_instr.opcode, d_instr.num);
-  } else if (d_instr.size == 3) {
-    printf("%02X %02X %02X",
-        d_instr.opcode,
-        d_instr.num & 0xFF, // First byte in memory
-        (d_instr.num >> 8) & 0xFF // Second byte in memory
-    );
-  }
-  printf(" : ");
-}
+  rom_buff = malloc(sz);
 
-// Print formatted.
-void disassembler_printf(struct DInstr d_instr) {
-  if (d_instr.type == ENC_NONE) {
-    printf("NONE");
-    return;
+  if (rom_buff == NULL || fread(rom_buff, 1, fsize, fp) != fsize) {
+    printf("Loading rom into to memory failed.\n");
+    free(rom_buff);
+    fclose(fp);
+    return false;
   }
 
-  const char *mnemonic = i8080_opcode_mnemonic(d_instr.opcode);
-  if (!mnemonic) {
-    printf("DB 0x%02X", d_instr.opcode);
-    return;
+  // Disassembly of the entire rome.
+  while (pc < fsize) {
+    uint8_t instr[3] = {0};
+    instr[0] = rom_buff[pc];
+    if (pc + 1 < fsize) instr[1] = rom_buff[pc + 1];
+    if (pc + 2 < fsize) instr[2] = rom_buff[pc + 2];
+    struct I8080Instr d_instr = i8080_decode_instr(instr);
+    printf("0x%04lX : ", pc);
+    i8080_printb_instr(d_instr);
+    i8080_printf_instr(d_instr);
+    putchar('\n');
+    pc += (d_instr.size == 0)? 1: d_instr.size;
   }
 
-  const char *r1 = (d_instr.reg_1 >= 0) ? i8080_code_reg((uint8_t)d_instr.reg_1, d_instr.type) : NULL;
-  const char *r2 = (d_instr.reg_2 >= 0) ? i8080_code_reg((uint8_t)d_instr.reg_2, d_instr.type) : NULL;
+  free(rom_buff);
+  fclose(fp);
 
-  printf("%s", mnemonic);
-
-  switch (d_instr.type) {
-    case ENC_NONE:
-    case ENC_FIXED:
-      break;
-
-    case ENC_REG_REG:
-      printf(" %s, %s", r1, r2);
-      break;
-
-    case ENC_REG_ID:
-    case ENC_REG_ARITH:
-    case ENC_REG_PAIR_SP:
-    case ENC_REG_PAIR_BD:
-    case ENC_REG_PAIR_PSW:
-      printf(" %s", r1);
-      break;
-
-    case ENC_REG_PAIR_SP_IMM16:
-      printf(" %s, 0x%04X", r1, d_instr.num);
-      break;
-
-    case ENC_REG_IMM8:
-      printf(" %s, 0x%02X", r1, d_instr.num);
-      break;
-
-    case ENC_IMM8:
-      printf(" 0x%02X", d_instr.num);
-      break;
-
-    case ENC_ADDR16:
-      printf(" 0x%04X", d_instr.num);
-      break;
-
-    case ENC_RST:
-      printf(" %u", d_instr.num);
-      break;
-  }
+  return true;
 }

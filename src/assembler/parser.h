@@ -9,8 +9,6 @@
 #include "lexer.h"
 #include "util/slice.h"
 
-struct SourceFile;
-
 enum OperandType {
   OP_VALUE,
   OP_LABEL

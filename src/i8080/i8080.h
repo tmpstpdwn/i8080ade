@@ -33,7 +33,7 @@ struct I8080Instr {
 };
 
 struct OpcodeRec {
-  char *mnemonic;
+  const char *mnemonic;
   enum EncType enc_t;
   uint8_t opcode;
 };

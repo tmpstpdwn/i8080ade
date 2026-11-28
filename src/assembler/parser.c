@@ -2,7 +2,7 @@
 #include <ctype.h>
 
 #include "util/vector.h"
-#include "i8080.h"
+#include "i8080/i8080.h"
 #include "lexer.h"
 #include "diagnostics.h"
 #include "parser.h"

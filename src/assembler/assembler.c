@@ -2,13 +2,13 @@
 #include <stdlib.h>
 
 #include "source.h"
-#include "i8080.h"
 #include "lexer.h"
 #include "diagnostics.h"
 #include "parser.h"
 #include "labels.h"
 #include "assembler.h"
 
+#include "i8080/i8080.h"
 #include "util/vector.h"
 #include "util/file.h"
 

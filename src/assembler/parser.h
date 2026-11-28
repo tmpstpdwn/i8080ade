@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#include "i8080.h"
+#include "i8080/i8080.h"
 #include "lexer.h"
 #include "util/slice.h"
 

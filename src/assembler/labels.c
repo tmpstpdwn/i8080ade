@@ -3,12 +3,12 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#include "i8080.h"
 #include "lexer.h"
 #include "diagnostics.h"
 #include "parser.h"
 #include "labels.h"
 
+#include "i8080/i8080.h"
 #include "util/slice.h"
 #include "util/vector.h"
 

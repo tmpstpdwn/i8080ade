@@ -2,7 +2,7 @@
 #include <stdbool.h>
 #include <stdlib.h>
 
-#include "i8080.h"
+#include "i8080/i8080.h"
 #include "disassembler.h"
 
 bool disassemble_file(const char *in) {

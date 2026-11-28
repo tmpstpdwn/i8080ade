@@ -39,16 +39,22 @@ bool disassemble_file(const char *in) {
 
   // Disassembly of the entire rome.
   while (pc < fsize) {
-    uint8_t instr[3] = {0};
-    instr[0] = rom_buff[pc];
-    if (pc + 1 < fsize) instr[1] = rom_buff[pc + 1];
-    if (pc + 2 < fsize) instr[2] = rom_buff[pc + 2];
-    struct I8080Instr d_instr = i8080_decode_instr(instr);
-    printf("0x%04lX : ", pc);
-    i8080_printb_instr(d_instr);
-    i8080_printf_instr(d_instr);
+    struct I8080Bytes instr_bytes = {0};
+    instr_bytes.bytes[0] = rom_buff[pc];
+    instr_bytes.size = 1;
+    if (pc + 1 < fsize) instr_bytes.bytes[instr_bytes.size++] = rom_buff[pc + 1];
+    if (pc + 2 < fsize) instr_bytes.bytes[instr_bytes.size++] = rom_buff[pc + 2];
+    struct I8080Instr instr = i8080_decode_instr(instr_bytes);
+    instr_bytes.size = instr.size;
+
+    // Print the instr disassembly.
+    printf("0x%04lX : ", pc); // addr
+    i8080_print_bytes(instr_bytes); // bytes by themselves
+    printf(" : ");
+    i8080_print_instr(instr); // decoded instr
     putchar('\n');
-    pc += (d_instr.size == 0)? 1: d_instr.size;
+
+    pc += instr.size;
   }
 
   free(rom_buff);

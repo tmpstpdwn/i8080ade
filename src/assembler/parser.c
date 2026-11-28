@@ -332,7 +332,7 @@ void parser_validate(struct SourceFile *source_file) {
 }
 
 void parser_print_items(struct SourceFile *source_file) {
-  const char *enc_str[] = {
+  const char *const enc_str[] = {
     "ENC_NONE", "ENC_FIXED", "ENC_REG_REG", "ENC_REG_ID",
     "ENC_REG_ARITH", "ENC_REG_PAIR_SP", "ENC_REG_PAIR_BD",
     "ENC_REG_PAIR_PSW", "ENC_REG_PAIR_SP_IMM16", "ENC_REG_IMM8",

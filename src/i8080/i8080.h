@@ -23,6 +23,11 @@ enum EncType {
   ENC_RST
 };
 
+struct I8080Bytes {
+  uint8_t bytes[3];
+  uint8_t size;
+};
+
 struct I8080Instr {
   uint8_t opcode;
   enum EncType enc_t;
@@ -44,13 +49,13 @@ enum EncType i8080_opcode_enc(uint8_t opcode);
 bool i8080_opcode_rec(struct Slice mnemonic, struct OpcodeRec *oprec);
 const char *i8080_opcode_mnemonic(uint8_t opcode);
 
-uint32_t i8080_encode_instr(struct I8080Instr instr);
-struct I8080Instr i8080_decode_instr(const uint8_t instr_bytes[3]);
+void i8080_encode_instr(struct I8080Instr instr, struct I8080Bytes *out_bytes);
+struct I8080Instr i8080_decode_instr(const struct I8080Bytes instr_bytes);
 
 int i8080_reg_code(struct Slice reg, enum EncType enc_t);
-const char *i8080_code_reg(uint8_t n, enum EncType type);
+const char *i8080_code_reg(uint8_t n, enum EncType enc_t);
 
-void i8080_printb_instr(struct I8080Instr instr);
-void i8080_printf_instr(struct I8080Instr instr);
+void i8080_print_bytes(struct I8080Bytes instr_bytes);
+void i8080_print_instr(struct I8080Instr instr);
 
 #endif

@@ -25,12 +25,10 @@ static bool assemble(struct SourceFile *source_file, struct Vector *buffer) {
           p->instr.opcode, p->instr.enc_t, p->instr.reg1.value,
           p->instr.reg2.value, p->instr.number.value, size
         };
-        uint32_t assembled_instr = i8080_encode_instr(instr);
-        while (size) {
-          uint8_t b = assembled_instr & 0xFF; 
-          if (!vector_append(buffer, &b)) return false;
-          assembled_instr = assembled_instr >> 8;
-          size--;
+        struct I8080Bytes bytes;
+        i8080_encode_instr(instr, &bytes);
+        for (uint8_t b_i = 0; b_i < bytes.size; b_i++) {
+          if (!vector_append(buffer, &bytes.bytes[b_i])) return false;
         }
         break;
       }

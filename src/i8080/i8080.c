@@ -1,6 +1,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "util/slice.h"
@@ -230,72 +231,83 @@ bool i8080_opcode_rec(struct Slice mnemonic, struct OpcodeRec *oprec) {
   return false;
 }
 
-uint32_t i8080_encode_instr(struct I8080Instr instr) {
-  uint32_t asmbld_instr = 0;
+void i8080_encode_instr(struct I8080Instr instr, struct I8080Bytes *out_bytes) {
+  if (!out_bytes) return;
 
-  enum EncType enc_t = instr.enc_t;
   uint8_t opcode = instr.opcode;
-
   uint8_t reg_1 = instr.reg_1;
   uint8_t reg_2 = instr.reg_2;
-
   uint16_t num = instr.num;
+  enum EncType enc_t = instr.enc_t;
+
+  uint8_t size = i8080_instr_size(enc_t);
+  out_bytes->size = size;
+  out_bytes->bytes[0] = 0;
+  out_bytes->bytes[1] = 0;
+  out_bytes->bytes[2] = 0;
 
   switch (enc_t) {
     case ENC_NONE:
+      out_bytes->size = 0;
       break;
 
     case ENC_FIXED:
-      asmbld_instr = opcode;
+      out_bytes->bytes[0] = opcode;
       break;
 
     case ENC_REG_REG:
-      asmbld_instr = opcode | (reg_1 << 3) | reg_2;
+      out_bytes->bytes[0] = opcode | (reg_1 << 3) | reg_2;
       break;
 
     case ENC_REG_ID:
-      asmbld_instr = opcode | (reg_1 << 3);
+      out_bytes->bytes[0] = opcode | (reg_1 << 3);
       break;
 
     case ENC_REG_ARITH:
-      asmbld_instr = opcode | reg_1;
+      out_bytes->bytes[0] = opcode | reg_1;
       break;
 
     case ENC_REG_PAIR_SP:
     case ENC_REG_PAIR_BD:
     case ENC_REG_PAIR_PSW:
-      asmbld_instr = opcode | (reg_1 << 4);
+      out_bytes->bytes[0] = opcode | (reg_1 << 4);
       break;
 
     case ENC_REG_PAIR_SP_IMM16:
-      asmbld_instr = num << 8 | (opcode + (reg_1 << 4));
+      out_bytes->bytes[0] = (opcode & 0xCF) | (reg_1 << 4);
+      out_bytes->bytes[1] = num & 0xFF;
+      out_bytes->bytes[2] = (num >> 8) & 0xFF;
       break;
 
     case ENC_REG_IMM8:
-      asmbld_instr = num << 8 | (opcode + (reg_1 << 3));
+      out_bytes->bytes[0] = (opcode & 0xC7) | (reg_1 << 3);
+      out_bytes->bytes[1] = num & 0xFF;
       break;
 
     case ENC_IMM8:
-      asmbld_instr = num << 8 | opcode;
+      out_bytes->bytes[0] = opcode;
+      out_bytes->bytes[1] = num & 0xFF;
       break;
 
     case ENC_ADDR16:
-      asmbld_instr = num << 8 | opcode;
+      out_bytes->bytes[0] = opcode;
+      out_bytes->bytes[1] = num & 0xFF;
+      out_bytes->bytes[2] = (num >> 8) & 0xFF;
       break;
 
     case ENC_RST:
-      asmbld_instr = opcode | (num << 3);
+      out_bytes->bytes[0] = opcode | (num << 3);
       break;
   }
-
-  return asmbld_instr;
 }
 
-struct I8080Instr i8080_decode_instr(const uint8_t instr_bytes[3]) {
-  uint8_t opcode = instr_bytes[0];
+struct I8080Instr i8080_decode_instr(const struct I8080Bytes instr_bytes) {
+  struct I8080Instr instr = {0};
+  if (!instr_bytes.size) return instr;
+
+  uint8_t opcode = instr_bytes.bytes[0];
   enum EncType enc_t = i8080_opcode_enc(opcode);
 
-  struct I8080Instr instr = {0};
   instr.opcode = opcode;
 
   if (enc_t == ENC_NONE) {
@@ -315,7 +327,7 @@ struct I8080Instr i8080_decode_instr(const uint8_t instr_bytes[3]) {
       reg_1 = (opcode >> 4) & 0x03;
       /* Falls through */
     case ENC_ADDR16:
-      num = instr_bytes[2] << 8 | instr_bytes[1];
+      num = instr_bytes.bytes[2] << 8 | instr_bytes.bytes[1];
       break;
     case ENC_REG_REG:
       reg_1 = (opcode >> 3) & 0x07;
@@ -334,10 +346,10 @@ struct I8080Instr i8080_decode_instr(const uint8_t instr_bytes[3]) {
       break;
     case ENC_REG_IMM8:
       reg_1 = (opcode >> 3) & 0x07;
-      num = instr_bytes[1];
+      num = instr_bytes.bytes[1];
       break;
     case ENC_IMM8:
-      num = instr_bytes[1];
+      num = instr_bytes.bytes[1];
       break;
     case ENC_RST:
       num = (opcode >> 3) & 0x07;
@@ -400,8 +412,8 @@ int i8080_reg_code(struct Slice reg, enum EncType enc_t) {
   return -1;
 }
 
-const char *i8080_code_reg(uint8_t n, enum EncType type) {
-  switch (type) {
+const char *i8080_code_reg(uint8_t n, enum EncType enc_t) {
+  switch (enc_t) {
     case ENC_REG_REG:
     case ENC_REG_ID:
     case ENC_REG_IMM8:
@@ -420,31 +432,22 @@ const char *i8080_code_reg(uint8_t n, enum EncType type) {
 }
 
 // Print bytes.
-void i8080_printb_instr(struct I8080Instr instr) {
-  if (instr.size == 1) {
-    printf("%02X      ", instr.opcode);
-  } else if (instr.size == 2) {
-    printf("%02X %02X   ", instr.opcode, instr.num);
-  } else if (instr.size == 3) {
-    printf("%02X %02X %02X",
-        instr.opcode,
-        instr.num & 0xFF, // First byte in memory
-        (instr.num >> 8) & 0xFF // Second byte in memory
-    );
-  }
-  printf(" : ");
+void i8080_print_bytes(struct I8080Bytes instr_bytes) {
+  if (instr_bytes.size == 1) {
+    printf("%02X      ", instr_bytes.bytes[0]);
+  } else if (instr_bytes.size == 2) {
+    printf("%02X %02X   ", instr_bytes.bytes[0], instr_bytes.bytes[1]);
+  } else if (instr_bytes.size == 3) {
+  	printf("%02X %02X %02X", instr_bytes.bytes[0], instr_bytes.bytes[1], instr_bytes.bytes[2]);
+	}
 }
 
 // Print formatted.
-void i8080_printf_instr(struct I8080Instr instr) {
-  if (instr.enc_t == ENC_NONE) {
-    printf("NONE");
-    return;
-  }
-
+void i8080_print_instr(struct I8080Instr instr) {
   const char *mnemonic = i8080_opcode_mnemonic(instr.opcode);
-  if (!mnemonic) {
-    printf("DB 0x%02X", instr.opcode);
+
+  if (instr.enc_t == ENC_NONE || !mnemonic) {
+    printf("NONE");
     return;
   }
 
